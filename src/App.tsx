@@ -12,7 +12,8 @@ import {
   ChevronDown,
   FileUp,
   Trash2,
-  Key
+  Key,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -242,7 +243,7 @@ export default function App() {
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `测试用例矩阵_${file?.name.split('.')[0]}.csv`);
+    link.setAttribute("download", `Excel模式_${file?.name.split('.')[0]}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -255,7 +256,7 @@ export default function App() {
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `测试点思维导图_${file?.name.split('.')[0]}.md`);
+    link.setAttribute("download", `Xmind模式_${file?.name.split('.')[0]}.md`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -351,7 +352,7 @@ export default function App() {
                 )}
               >
                 <CheckCircle2 className="w-4 h-4" />
-                测试用例/导图
+                需求转用例
                 {(generationMode === 'matrix' || generationMode === 'xmind') && (
                   <motion.div layoutId="nav-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />
                 )}
@@ -370,6 +371,63 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8 bg-indigo-900 rounded-2xl p-6 text-white shadow-xl shadow-indigo-200/50">
+          <h3 className="font-semibold mb-4 flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-indigo-300" />
+            工作原理：{generationMode === 'analysis' ? '需求评审分析' : '需求转用例'}
+          </h3>
+          <div className="grid md:grid-cols-3 gap-6">
+            {generationMode === 'analysis' ? (
+              <>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">1</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">上传需求文档</p>
+                    <p className="text-xs text-indigo-200 mt-1">支持 PRD、需求说明书等原始文档。</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">2</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">AI 深度分析</p>
+                    <p className="text-xs text-indigo-200 mt-1">识别逻辑缺陷、边界场景及潜在遗漏点。</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">3</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">生成评审报告</p>
+                    <p className="text-xs text-indigo-200 mt-1">获取结构化分析报告及需求优化建议。</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">1</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">选择数据源</p>
+                    <p className="text-xs text-indigo-200 mt-1">可基于原始文档或已评审后的文档生成。</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">2</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">AI 拆解测试点</p>
+                    <p className="text-xs text-indigo-200 mt-1">根据业务逻辑自动拆解详尽的测试场景。</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">3</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">一键导出结果</p>
+                    <p className="text-xs text-indigo-200 mt-1">支持 Excel 模式用例或 Xmind 思维导图。</p>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
           {/* Left Column: Upload & Controls */}
@@ -600,7 +658,7 @@ export default function App() {
                           generationMode === 'matrix' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
                         )}
                       >
-                        用例矩阵
+                        Excel模式
                       </button>
                       <button
                         onClick={() => setGenerationMode('xmind')}
@@ -609,7 +667,7 @@ export default function App() {
                           generationMode === 'xmind' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
                         )}
                       >
-                        测试导图
+                        Xmind模式
                       </button>
                     </div>
                   </div>
@@ -659,24 +717,6 @@ export default function App() {
                   <p className="text-sm text-red-700">{error}</p>
                 </div>
               )}
-            </div>
-
-            <div className="bg-indigo-900 rounded-2xl p-6 text-white shadow-xl shadow-indigo-200/50">
-              <h3 className="font-semibold mb-2">工作原理</h3>
-              <ul className="text-sm text-indigo-100 space-y-3">
-                <li className="flex gap-2">
-                  <span className="bg-indigo-700 w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0">1</span>
-                  上传您的 PRD 或需求文档。
-                </li>
-                <li className="flex gap-2">
-                  <span className="bg-indigo-700 w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0">2</span>
-                  Gemini AI 分析功能逻辑。
-                </li>
-                <li className="flex gap-2">
-                  <span className="bg-indigo-700 w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0">3</span>
-                  获取包含步骤和预期结果的结构化测试用例。
-                </li>
-              </ul>
             </div>
           </div>
 
@@ -858,7 +898,7 @@ export default function App() {
               <div className="space-y-4">
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 flex items-center justify-between shadow-sm">
                   <div>
-                    <h3 className="text-lg font-semibold text-slate-900">测试点思维导图</h3>
+                    <h3 className="text-lg font-semibold text-slate-900">Xmind测试导图</h3>
                     <p className="text-sm text-slate-500">可直接复制以下内容到 XMind 使用</p>
                   </div>
                   <button 
