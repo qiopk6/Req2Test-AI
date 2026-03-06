@@ -22,7 +22,7 @@ export async function generateTestCases(
   requirementText: string, 
   images?: ImageContent[], 
   customApiKey?: string,
-  modelName: string = "gemini-3.1-pro-preview"
+  modelName: string = "gemini-3-flash-preview"
 ): Promise<TestCase[]> {
   const apiKey = customApiKey || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
@@ -108,14 +108,15 @@ export async function generateTestCases(
 
     return JSON.parse(response.text);
   } catch (error: any) {
-    console.error("Gemini API Error:", error);
-    if (error.message?.includes("Safety")) {
+    console.error("Gemini API Error (Test Cases):", error);
+    const errorMsg = error.message || "";
+    if (errorMsg.includes("Safety")) {
       throw new Error("内容被安全过滤器拦截，请检查您的文档或图片内容。");
     }
-    if (error.message?.includes("Quota")) {
-      throw new Error("API 配额已耗尽，请稍后再试。");
+    if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("Quota")) {
+      throw new Error("API 请求配额已耗尽或请求过于频繁。请稍后再试，或在设置中配置您自己的 API Key 以获得更高配额。");
     }
-    throw new Error(`生成失败: ${error.message || "未知错误"}`);
+    throw new Error(`生成测试用例失败: ${errorMsg || "未知错误"}`);
   }
 }
 
@@ -123,7 +124,7 @@ export async function generateXMindContent(
   requirementText: string, 
   images?: ImageContent[], 
   customApiKey?: string,
-  modelName: string = "gemini-3.1-pro-preview"
+  modelName: string = "gemini-3-flash-preview"
 ): Promise<string> {
   const apiKey = customApiKey || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
@@ -239,9 +240,106 @@ export async function generateXMindContent(
     return response.text || "";
   } catch (error: any) {
     console.error("Gemini API Error (XMind):", error);
-    if (error.message?.includes("Safety")) {
+    const errorMsg = error.message || "";
+    if (errorMsg.includes("Safety")) {
       throw new Error("内容被安全过滤器拦截，请检查您的文档或图片内容。");
     }
-    throw new Error(`生成思维导图失败: ${error.message || "未知错误"}`);
+    if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
+      throw new Error("API 请求配额已耗尽或请求过于频繁。请稍后再试，或在设置中配置您自己的 API Key 以获得更高配额。");
+    }
+    throw new Error(`生成思维导图失败: ${errorMsg || "未知错误"}`);
+  }
+}
+
+export async function analyzeRequirements(
+  requirementText: string, 
+  images?: ImageContent[], 
+  customApiKey?: string,
+  modelName: string = "gemini-3-flash-preview"
+): Promise<{ report: string; revisedDocument: string }> {
+  const apiKey = customApiKey || process.env.GEMINI_API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
+  const model = modelName;
+    const prompt = `
+    请扮演以下角色共同评审需求文档：
+
+    - 资深产品经理
+    - 系统架构师
+    - QA测试负责人
+    - 用户体验设计师
+
+    请对需求文档进行多角色评审，并输出评审报告。
+
+    重点发现：
+    1 产品逻辑漏洞
+    2 用户体验问题
+    3 业务规则缺失
+    4 异常场景缺失
+    5 接口设计问题
+    6 数据设计问题
+    7 测试难点
+    8 技术风险
+
+    最终输出要求：
+    请将输出分为两个部分：
+    1. 评审报告：包含需求理解、需求问题清单、风险评估、优化建议。
+    2. 修正后的完整需求文档：**这是最关键的部分**。请基于原始需求文档，将评审中发现的问题进行修正，并补充缺失的细节。
+       **注意：必须保留原始文档中的所有现有章节、功能描述和细节，严禁进行任何形式的删减或概括。** 
+       你需要在保持原貌的基础上进行“增量式”的完善和修正，确保输出的是一份可以直接替代原文档的、更严谨、更完整的版本。
+
+    请以 JSON 格式返回，包含以下字段：
+    - report: 评审报告的 Markdown 内容
+    - revisedDocument: 修正后的完整需求文档的 Markdown 内容（必须包含全部原始内容 + 修正补充内容）
+    
+    **需求文档内容如下：**
+    ${requirementText}
+
+    ${images && images.length > 0 ? "此外，我还提供了一些设计图作为参考，请结合设计图进行评审。" : ""}
+  `;
+
+  const parts: any[] = [{ text: prompt }];
+  if (images && images.length > 0) {
+    images.forEach(img => {
+      parts.push({
+        inlineData: {
+          mimeType: img.mimeType,
+          data: img.data.split(',')[1] || img.data
+        }
+      });
+    });
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: { parts },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            report: { type: Type.STRING },
+            revisedDocument: { type: Type.STRING }
+          },
+          required: ["report", "revisedDocument"]
+        }
+      }
+    });
+
+    if (!response.text) {
+      throw new Error("AI 未返回任何内容");
+    }
+
+    return JSON.parse(response.text);
+  } catch (error: any) {
+    console.error("Gemini API Error (Analysis):", error);
+    const errorMsg = error.message || "";
+    if (errorMsg.includes("Safety")) {
+      throw new Error("内容被安全过滤器拦截，请检查您的文档或图片内容。");
+    }
+    if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
+      throw new Error("API 请求配额已耗尽或请求过于频繁。请稍后再试，或在设置中配置您自己的 API Key 以获得更高配额。");
+    }
+    throw new Error(`需求分析失败: ${errorMsg || "未知错误"}`);
   }
 }

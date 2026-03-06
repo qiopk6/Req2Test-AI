@@ -18,7 +18,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { parseFile } from './utils/fileParser';
-import { generateTestCases, generateXMindContent, type TestCase, type ImageContent } from './services/gemini';
+import { 
+  generateTestCases, 
+  generateXMindContent, 
+  analyzeRequirements,
+  type TestCase, 
+  type ImageContent 
+} from './services/gemini';
+import Markdown from 'react-markdown';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -33,12 +40,16 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [xmindContent, setXmindContent] = useState<string>('');
-  const [generationMode, setGenerationMode] = useState<'matrix' | 'xmind'>('matrix');
+  const [analysisReport, setAnalysisReport] = useState<string>('');
+  const [revisedDocument, setRevisedDocument] = useState<string>('');
+  const [analysisTab, setAnalysisTab] = useState<'report' | 'revised'>('report');
+  const [generationMode, setGenerationMode] = useState<'matrix' | 'xmind' | 'analysis'>('matrix');
+  const [sourceType, setSourceType] = useState<'original' | 'revised'>('original');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('全部');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [customApiKey, setCustomApiKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState('gemini-3.1-pro-preview');
+  const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
   const [showApiKey, setShowApiKey] = useState(false);
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -71,6 +82,8 @@ export default function App() {
     setParsedText('');
     setTestCases([]);
     setXmindContent('');
+    setAnalysisReport('');
+    setRevisedDocument('');
     setError(null);
   };
 
@@ -111,18 +124,27 @@ export default function App() {
     });
   };
 
-  const processFile = async () => {
-    if (!file) return;
+  const processFile = async (targetMode?: 'matrix' | 'xmind' | 'analysis', forceSource?: string) => {
+    const mode = targetMode || generationMode;
+    let textToUse = forceSource;
+    
+    if (!textToUse) {
+      textToUse = sourceType === 'revised' ? revisedDocument : parsedText;
+    }
+
+    if (!file && !forceSource && !textToUse) return;
 
     try {
-      let text = parsedText;
-      if (!text) {
+      let text = textToUse;
+      if (!text && file) {
         setIsParsing(true);
         setError(null);
         text = await parseFile(file);
         setParsedText(text);
         setIsParsing(false);
       }
+      
+      if (!text) return;
       
       setIsGenerating(true);
 
@@ -134,14 +156,27 @@ export default function App() {
         })));
       }
 
-      if (generationMode === 'matrix') {
+      if (mode === 'matrix') {
         const cases = await generateTestCases(text, images, customApiKey, selectedModel);
         setTestCases(cases);
         setXmindContent('');
-      } else {
+        setAnalysisReport('');
+        setRevisedDocument('');
+        setGenerationMode('matrix');
+      } else if (mode === 'xmind') {
         const xmind = await generateXMindContent(text, images, customApiKey, selectedModel);
         setXmindContent(xmind);
         setTestCases([]);
+        setAnalysisReport('');
+        setRevisedDocument('');
+        setGenerationMode('xmind');
+      } else {
+        const result = await analyzeRequirements(text, images, customApiKey, selectedModel);
+        setAnalysisReport(result.report);
+        setRevisedDocument(result.revisedDocument);
+        setTestCases([]);
+        setXmindContent('');
+        setGenerationMode('analysis');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '发生意外错误。');
@@ -193,6 +228,32 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  const exportAnalysisReport = () => {
+    if (!analysisReport) return;
+    const blob = new Blob([analysisReport], { type: 'text/markdown;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `需求分析报告_${file?.name.split('.')[0]}.md`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportRevisedDocument = () => {
+    if (!revisedDocument) return;
+    const blob = new Blob([revisedDocument], { type: 'text/markdown;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `优化后的需求文档_${file?.name.split('.')[0]}.md`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const filteredCases = testCases.filter(tc => {
     const matchesSearch = tc.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
                          tc.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -224,11 +285,44 @@ export default function App() {
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-              <CheckCircle2 className="text-white w-5 h-5" />
+          <div className="flex items-center gap-8">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
+                <CheckCircle2 className="text-white w-5 h-5" />
+              </div>
+              <h1 className="text-xl font-bold tracking-tight text-slate-900">需求转测试 <span className="text-indigo-600">AI</span></h1>
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900">需求转测试 <span className="text-indigo-600">AI</span></h1>
+
+            <nav className="hidden md:flex items-center gap-1 ml-8 self-stretch">
+              <button 
+                onClick={() => setGenerationMode('analysis')}
+                className={cn(
+                  "px-4 text-sm font-semibold transition-all relative flex items-center gap-2 h-full",
+                  generationMode === 'analysis' ? "text-indigo-600" : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+                )}
+              >
+                <FileText className="w-4 h-4" />
+                需求评审分析
+                {generationMode === 'analysis' && (
+                  <motion.div layoutId="nav-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />
+                )}
+              </button>
+              <button 
+                onClick={() => {
+                  if (generationMode === 'analysis') setGenerationMode('matrix');
+                }}
+                className={cn(
+                  "px-4 text-sm font-semibold transition-all relative flex items-center gap-2 h-full",
+                  (generationMode === 'matrix' || generationMode === 'xmind') ? "text-indigo-600" : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+                )}
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                测试用例/导图
+                {(generationMode === 'matrix' || generationMode === 'xmind') && (
+                  <motion.div layoutId="nav-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />
+                )}
+              </button>
+            </nav>
           </div>
           <div className="flex items-center gap-4">
             <a 
@@ -388,56 +482,109 @@ export default function App() {
                 </div>
               )}
 
-              <div className="mt-6 space-y-3">
-                <h3 className="text-sm font-semibold text-slate-700">选择生成模式</h3>
-                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
-                  <button
-                    onClick={() => setGenerationMode('matrix')}
-                    className={cn(
-                      "py-2 text-xs font-medium rounded-lg transition-all",
-                      generationMode === 'matrix' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                    )}
-                  >
-                    测试用例矩阵
-                  </button>
-                  <button
-                    onClick={() => setGenerationMode('xmind')}
-                    className={cn(
-                      "py-2 text-xs font-medium rounded-lg transition-all",
-                      generationMode === 'xmind' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                    )}
-                  >
-                    测试点思维导图
-                  </button>
+              {(generationMode === 'matrix' || generationMode === 'xmind') && (
+                <div className="mt-6 space-y-4">
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold text-slate-700">数据源</h3>
+                    <div className="flex flex-col gap-2">
+                      <button
+                        onClick={() => setSourceType('original')}
+                        className={cn(
+                          "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
+                          sourceType === 'original' 
+                            ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
+                            : "border-slate-200 bg-white hover:border-indigo-300"
+                        )}
+                      >
+                        <FileText className={cn("w-4 h-4", sourceType === 'original' ? "text-indigo-600" : "text-slate-400")} />
+                        <div className="flex-1 min-w-0">
+                          <p className={cn("text-xs font-bold truncate", sourceType === 'original' ? "text-indigo-900" : "text-slate-700")}>
+                            {file?.name || '原始需求文档'}
+                          </p>
+                          <p className="text-[10px] text-slate-500">PRD 原始解析内容</p>
+                        </div>
+                        {sourceType === 'original' && <CheckCircle2 className="w-4 h-4 text-indigo-600" />}
+                      </button>
+
+                      {revisedDocument && (
+                        <button
+                          onClick={() => setSourceType('revised')}
+                          className={cn(
+                            "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
+                            sourceType === 'revised' 
+                              ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
+                              : "border-slate-200 bg-white hover:border-indigo-300"
+                          )}
+                        >
+                          <div className="w-4 h-4 bg-indigo-600 rounded flex items-center justify-center shrink-0">
+                            <CheckCircle2 className="w-3 h-3 text-white" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={cn("text-xs font-bold truncate", sourceType === 'revised' ? "text-indigo-900" : "text-slate-700")}>
+                              修正版: {file?.name}
+                            </p>
+                            <p className="text-[10px] text-slate-500">基于评审建议优化后的文档</p>
+                          </div>
+                          {sourceType === 'revised' && <CheckCircle2 className="w-4 h-4 text-indigo-600" />}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold text-slate-700">视图模式</h3>
+                    <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
+                      <button
+                        onClick={() => setGenerationMode('matrix')}
+                        className={cn(
+                          "py-2 text-[10px] font-medium rounded-lg transition-all",
+                          generationMode === 'matrix' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                        )}
+                      >
+                        用例矩阵
+                      </button>
+                      <button
+                        onClick={() => setGenerationMode('xmind')}
+                        className={cn(
+                          "py-2 text-[10px] font-medium rounded-lg transition-all",
+                          generationMode === 'xmind' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                        )}
+                      >
+                        测试导图
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {file && (
                 <button
-                  onClick={processFile}
+                  onClick={() => processFile()}
                   disabled={isParsing || isGenerating}
                   className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
                 >
                   {isParsing || isGenerating ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin" />
-                      {isParsing ? '正在解析文档...' : 'AI 正在生成...'}
+                      {isParsing ? '正在解析文档...' : 'AI 正在分析生成...'}
                     </>
                   ) : (
                     <>
-                      {(testCases.length > 0 || xmindContent) ? '重新生成' : '生成测试内容'}
+                      {(testCases.length > 0 || xmindContent || analysisReport || revisedDocument) ? '重新生成' : '开始分析生成'}
                     </>
                   )}
                 </button>
               )}
 
-              {testCases.length > 0 || xmindContent ? (
+              {testCases.length > 0 || xmindContent || analysisReport || revisedDocument ? (
                 <button
                   onClick={() => {
                     setFile(null);
                     setDesignFiles([]);
                     setTestCases([]);
                     setXmindContent('');
+                    setAnalysisReport('');
+                    setRevisedDocument('');
                   }}
                   className="w-full mt-4 text-slate-500 hover:text-red-600 text-sm font-medium flex items-center justify-center gap-2 transition-colors"
                 >
@@ -475,14 +622,16 @@ export default function App() {
 
           {/* Right Column: Results */}
           <div className="lg:col-span-8 space-y-6">
-            {((generationMode === 'matrix' && !testCases.length) || (generationMode === 'xmind' && !xmindContent)) && !isParsing && !isGenerating ? (
+            {((generationMode === 'matrix' && !testCases.length) || 
+              (generationMode === 'xmind' && !xmindContent) || 
+              (generationMode === 'analysis' && !analysisReport && !revisedDocument)) && !isParsing && !isGenerating ? (
               <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-center p-8 bg-white rounded-2xl border border-slate-200 border-dashed">
                 <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
                   <FileText className="w-8 h-8 text-slate-300" />
                 </div>
-                <h3 className="text-lg font-semibold text-slate-900">尚未生成测试内容</h3>
+                <h3 className="text-lg font-semibold text-slate-900">尚未生成内容</h3>
                 <p className="text-slate-500 max-w-xs mt-2">
-                  {file ? '已加载文档，点击“生成”按钮开始分析。' : '上传文档并点击生成，在此查看 AI 驱动的测试用例或思维导图。'}
+                  {file ? '已加载文档，点击“生成”按钮开始分析。' : '上传文档并点击生成，在此查看 AI 驱动的测试用例、思维导图或需求分析。'}
                 </p>
               </div>
             ) : (isParsing || isGenerating) ? (
@@ -645,7 +794,7 @@ export default function App() {
                   )}
                 </div>
               </div>
-            ) : (
+            ) : generationMode === 'xmind' ? (
               <div className="space-y-4">
                 <div className="bg-white p-4 rounded-2xl border border-slate-200 flex items-center justify-between shadow-sm">
                   <div>
@@ -664,6 +813,59 @@ export default function App() {
                   <pre className="whitespace-pre-wrap font-mono text-sm text-slate-700 leading-relaxed">
                     {xmindContent}
                   </pre>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col gap-4 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl">
+                      <button
+                        onClick={() => setAnalysisTab('report')}
+                        className={cn(
+                          "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
+                          analysisTab === 'report' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                        )}
+                      >
+                        评审报告
+                      </button>
+                      <button
+                        onClick={() => setAnalysisTab('revised')}
+                        className={cn(
+                          "px-4 py-1.5 text-xs font-medium rounded-lg transition-all",
+                          analysisTab === 'revised' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                        )}
+                      >
+                        修正后的文档
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {analysisTab === 'revised' && (
+                        <div className="flex items-center gap-2 mr-2 pr-2 border-r border-slate-200">
+                          <button 
+                            onClick={() => {
+                              setSourceType('revised');
+                              setGenerationMode('matrix');
+                            }}
+                            className="flex items-center gap-2 text-[10px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-4 py-2 rounded-xl transition-colors"
+                          >
+                            <CheckCircle2 className="w-3 h-3" />
+                            基于此修正文档进行测试设计
+                          </button>
+                        </div>
+                      )}
+                      <button 
+                        onClick={analysisTab === 'report' ? exportAnalysisReport : exportRevisedDocument}
+                        className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-xl hover:bg-slate-800 transition-colors shrink-0"
+                      >
+                        <Download className="w-4 h-4" />
+                        导出{analysisTab === 'report' ? '报告' : '文档'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm min-h-[500px] prose prose-slate max-w-none">
+                  <Markdown>{analysisTab === 'report' ? analysisReport : revisedDocument}</Markdown>
                 </div>
               </div>
             )}
