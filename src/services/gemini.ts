@@ -24,7 +24,7 @@ export async function generateTestCases(
   customApiKey?: string,
   modelName: string = "gemini-3-flash-preview"
 ): Promise<TestCase[]> {
-  const apiKey = customApiKey || process.env.GEMINI_API_KEY || '';
+  const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
   const model = modelName;
   
@@ -126,7 +126,7 @@ export async function generateXMindContent(
   customApiKey?: string,
   modelName: string = "gemini-3-flash-preview"
 ): Promise<string> {
-  const apiKey = customApiKey || process.env.GEMINI_API_KEY || '';
+  const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
   const model = modelName;
   
@@ -257,7 +257,7 @@ export async function analyzeRequirements(
   customApiKey?: string,
   modelName: string = "gemini-3-flash-preview"
 ): Promise<{ report: string; revisedDocument: string }> {
-  const apiKey = customApiKey || process.env.GEMINI_API_KEY || '';
+  const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
   const model = modelName;
     const prompt = `

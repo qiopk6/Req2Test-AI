@@ -27,6 +27,15 @@ import {
 } from './services/gemini';
 import Markdown from 'react-markdown';
 
+declare global {
+  interface Window {
+    aistudio?: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
+
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -44,13 +53,37 @@ export default function App() {
   const [revisedDocument, setRevisedDocument] = useState<string>('');
   const [analysisTab, setAnalysisTab] = useState<'report' | 'revised'>('report');
   const [generationMode, setGenerationMode] = useState<'matrix' | 'xmind' | 'analysis'>('matrix');
-  const [sourceType, setSourceType] = useState<'original' | 'revised'>('original');
+  const [sourceType, setSourceType] = useState<'original' | 'revised' | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('全部');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [customApiKey, setCustomApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [hasPlatformKey, setHasPlatformKey] = useState(false);
+
+  React.useEffect(() => {
+    const checkPlatformKey = async () => {
+      let hasKey = false;
+      if (window.aistudio?.hasSelectedApiKey) {
+        hasKey = await window.aistudio.hasSelectedApiKey();
+      }
+      if (!hasKey && process.env.API_KEY) {
+        hasKey = true;
+      }
+      setHasPlatformKey(hasKey);
+    };
+    checkPlatformKey();
+  }, []);
+
+  const handleOpenPlatformKey = async () => {
+    if (window.aistudio?.openSelectKey) {
+      await window.aistudio.openSelectKey();
+      // After opening, we assume they might have selected one
+      const hasKey = await window.aistudio.hasSelectedApiKey();
+      setHasPlatformKey(hasKey);
+    }
+  };
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -79,6 +112,7 @@ export default function App() {
     }
 
     setFile(selectedFile);
+    setSourceType('original');
     setParsedText('');
     setTestCases([]);
     setXmindContent('');
@@ -360,15 +394,38 @@ export default function App() {
                     >
                       <div>
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
-                          API Key
+                          API Key 选项
                         </label>
-                        <input 
-                          type="password"
-                          placeholder="输入您的 Gemini API Key"
-                          className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
-                          value={customApiKey}
-                          onChange={(e) => setCustomApiKey(e.target.value)}
-                        />
+                        <div className="space-y-2">
+                          <button
+                            onClick={handleOpenPlatformKey}
+                            className={cn(
+                              "w-full px-4 py-2 rounded-xl text-xs font-medium border transition-all flex items-center justify-between",
+                              hasPlatformKey 
+                                ? "bg-emerald-50 border-emerald-200 text-emerald-700" 
+                                : "bg-white border-slate-200 text-slate-700 hover:border-indigo-500 hover:text-indigo-600"
+                            )}
+                          >
+                            <span className="flex items-center gap-2">
+                              <Key className="w-3 h-3" />
+                              {hasPlatformKey ? '已关联平台 API Key' : '关联平台 API Key (推荐)'}
+                            </span>
+                            {hasPlatformKey && <CheckCircle2 className="w-3 h-3" />}
+                          </button>
+
+                          <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                              <Key className="h-3 w-3 text-slate-400" />
+                            </div>
+                            <input 
+                              type="password"
+                              placeholder="或输入自定义 API Key"
+                              className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                              value={customApiKey}
+                              onChange={(e) => setCustomApiKey(e.target.value)}
+                            />
+                          </div>
+                        </div>
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
@@ -488,12 +545,14 @@ export default function App() {
                     <h3 className="text-sm font-semibold text-slate-700">数据源</h3>
                     <div className="flex flex-col gap-2">
                       <button
-                        onClick={() => setSourceType('original')}
+                        onClick={() => file && setSourceType('original')}
+                        disabled={!file}
                         className={cn(
                           "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
                           sourceType === 'original' 
                             ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
-                            : "border-slate-200 bg-white hover:border-indigo-300"
+                            : "border-slate-200 bg-white hover:border-indigo-300",
+                          !file && "opacity-50 cursor-not-allowed"
                         )}
                       >
                         <FileText className={cn("w-4 h-4", sourceType === 'original' ? "text-indigo-600" : "text-slate-400")} />
@@ -585,6 +644,7 @@ export default function App() {
                     setXmindContent('');
                     setAnalysisReport('');
                     setRevisedDocument('');
+                    setSourceType(null);
                   }}
                   className="w-full mt-4 text-slate-500 hover:text-red-600 text-sm font-medium flex items-center justify-center gap-2 transition-colors"
                 >
