@@ -11,7 +11,8 @@ import {
   ChevronRight,
   ChevronDown,
   FileUp,
-  Trash2
+  Trash2,
+  Key
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -25,6 +26,7 @@ function cn(...inputs: ClassValue[]) {
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
+  const [parsedText, setParsedText] = useState<string>('');
   const [designFiles, setDesignFiles] = useState<File[]>([]);
   const [isParsing, setIsParsing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -35,6 +37,9 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('全部');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [customApiKey, setCustomApiKey] = useState('');
+  const [selectedModel, setSelectedModel] = useState('gemini-3.1-pro-preview');
+  const [showApiKey, setShowApiKey] = useState(false);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -63,8 +68,10 @@ export default function App() {
     }
 
     setFile(selectedFile);
-    setError(null);
+    setParsedText('');
     setTestCases([]);
+    setXmindContent('');
+    setError(null);
   };
 
   const handleDesignFiles = (selectedFiles: File[]) => {
@@ -108,11 +115,15 @@ export default function App() {
     if (!file) return;
 
     try {
-      setIsParsing(true);
-      setError(null);
-      const text = await parseFile(file);
+      let text = parsedText;
+      if (!text) {
+        setIsParsing(true);
+        setError(null);
+        text = await parseFile(file);
+        setParsedText(text);
+        setIsParsing(false);
+      }
       
-      setIsParsing(false);
       setIsGenerating(true);
 
       let images: ImageContent[] = [];
@@ -124,11 +135,11 @@ export default function App() {
       }
 
       if (generationMode === 'matrix') {
-        const cases = await generateTestCases(text, images);
+        const cases = await generateTestCases(text, images, customApiKey, selectedModel);
         setTestCases(cases);
         setXmindContent('');
       } else {
-        const xmind = await generateXMindContent(text, images);
+        const xmind = await generateXMindContent(text, images, customApiKey, selectedModel);
         setXmindContent(xmind);
         setTestCases([]);
       }
@@ -236,6 +247,60 @@ export default function App() {
           {/* Left Column: Upload & Controls */}
           <div className="lg:col-span-4 space-y-6">
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+              <div className="mb-6">
+                <button 
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors mb-2"
+                >
+                  <Key className="w-4 h-4" />
+                  {showApiKey ? '隐藏 API Key 设置' : '设置自定义 API Key (可选)'}
+                  <ChevronDown className={cn("w-4 h-4 transition-transform", showApiKey && "rotate-180")} />
+                </button>
+                <AnimatePresence>
+                  {showApiKey && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden space-y-3"
+                    >
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+                          API Key
+                        </label>
+                        <input 
+                          type="password"
+                          placeholder="输入您的 Gemini API Key"
+                          className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                          value={customApiKey}
+                          onChange={(e) => setCustomApiKey(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">
+                          选择模型
+                        </label>
+                        <div className="relative">
+                          <select 
+                            className="w-full pl-4 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer"
+                            value={selectedModel}
+                            onChange={(e) => setSelectedModel(e.target.value)}
+                          >
+                            <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (最强能力)</option>
+                            <option value="gemini-3-flash-preview">Gemini 3 Flash (极速响应)</option>
+                            <option value="gemini-2.5-flash">Gemini 2.5 Flash (稳定版本)</option>
+                          </select>
+                          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        如果不填写 Key，将使用系统默认 Key。您的设置仅在本地运行，不会被存储。
+                      </p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
               <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
                 <FileUp className="w-5 h-5 text-indigo-600" />
                 上传需求文档
@@ -347,7 +412,7 @@ export default function App() {
                 </div>
               </div>
 
-              {file && !testCases.length && !xmindContent && (
+              {file && (
                 <button
                   onClick={processFile}
                   disabled={isParsing || isGenerating}
@@ -360,7 +425,7 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      生成测试用例
+                      {(testCases.length > 0 || xmindContent) ? '重新生成' : '生成测试内容'}
                     </>
                   )}
                 </button>
@@ -410,13 +475,15 @@ export default function App() {
 
           {/* Right Column: Results */}
           <div className="lg:col-span-8 space-y-6">
-            {!testCases.length && !xmindContent && !isParsing && !isGenerating ? (
+            {((generationMode === 'matrix' && !testCases.length) || (generationMode === 'xmind' && !xmindContent)) && !isParsing && !isGenerating ? (
               <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-center p-8 bg-white rounded-2xl border border-slate-200 border-dashed">
                 <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
                   <FileText className="w-8 h-8 text-slate-300" />
                 </div>
                 <h3 className="text-lg font-semibold text-slate-900">尚未生成测试内容</h3>
-                <p className="text-slate-500 max-w-xs mt-2">上传文档并点击生成，在此查看 AI 驱动的测试用例或思维导图。</p>
+                <p className="text-slate-500 max-w-xs mt-2">
+                  {file ? '已加载文档，点击“生成”按钮开始分析。' : '上传文档并点击生成，在此查看 AI 驱动的测试用例或思维导图。'}
+                </p>
               </div>
             ) : (isParsing || isGenerating) ? (
               <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-center p-8 bg-white rounded-2xl border border-slate-200">

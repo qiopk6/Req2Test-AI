@@ -1,7 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-
 export interface TestCase {
   module: string;
   id: string;
@@ -20,8 +18,15 @@ export interface ImageContent {
   mimeType: string;
 }
 
-export async function generateTestCases(requirementText: string, images?: ImageContent[]): Promise<TestCase[]> {
-  const model = "gemini-3.1-pro-preview";
+export async function generateTestCases(
+  requirementText: string, 
+  images?: ImageContent[], 
+  customApiKey?: string,
+  modelName: string = "gemini-3.1-pro-preview"
+): Promise<TestCase[]> {
+  const apiKey = customApiKey || process.env.GEMINI_API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
+  const model = modelName;
   
   const prompt = `
     你是一名顶级软件测试专家。我将提供整个产品的功能文档、页面设计和接口列表。请帮我生成**极其详尽的全套测试用例矩阵**。
@@ -114,42 +119,98 @@ export async function generateTestCases(requirementText: string, images?: ImageC
   }
 }
 
-export async function generateXMindContent(requirementText: string, images?: ImageContent[]): Promise<string> {
-  const model = "gemini-3.1-pro-preview";
+export async function generateXMindContent(
+  requirementText: string, 
+  images?: ImageContent[], 
+  customApiKey?: string,
+  modelName: string = "gemini-3.1-pro-preview"
+): Promise<string> {
+  const apiKey = customApiKey || process.env.GEMINI_API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
+  const model = modelName;
   
   const prompt = `
-    你是一名顶级软件测试专家。我将提供整个产品的功能文档、页面设计和接口列表。请帮我生成**全套测试点思维导图结构**。
-    
-    【输出目标】
-    根据需求文档，生成覆盖全面的测试点思维导图。
+    你是一名拥有10年以上经验的软件测试专家，擅长测试分析和测试设计。
 
-    【输出格式要求】
-    1. 必须使用 **Markdown 层级结构**（使用 # 表示一级标题，## 表示二级标题，- 表示三级及以下测试点）。这种格式可以被 XMind 直接导入。
-    2. 语言要求：**极度简练、专业、美观**。不要使用长句子，使用短语描述测试点。
-    3. 层级结构必须如下：
-       # [模块名称]
-       ## 功能测试
-       ## 业务流程测试
-       ## 异常测试
-       ## 边界测试
-       ## 接口测试
-       ## UI交互测试
-       ## 权限测试
-       ## 网络异常测试
-       ## 兼容性测试
-       ## 性能测试
-       ## 安全测试
-       ## 埋点日志测试
+    我会提供产品需求文档（PRD）或功能说明，你需要根据需求内容生成 **XMind结构的测试用例思维导图**。
 
-    4. 每个模块下必须补充完整测试点，包括：正常流程、用户异常操作、参数校验、数据异常、网络异常、边界值、权限限制。
-    5. 每个功能至少生成 **10个以上测试点**。
-    6. 覆盖：正常场景、异常场景、边界值测试、用户误操作、接口异常、网络异常、安全风险。
+    【目标】
+
+    生成可以直接用于测试执行的思维导图，结构为：
+
+    功能
+    测试点
+    测试步骤 + 预期结果
+
+    【输出格式】
+
+    必须使用 **Markdown 标题层级结构**，以确保 XMind 导入后能识别为 3 级结构：
+
+    # 功能模块 (第1级)
+    ## 测试点名称 (第2级)
+    ### 步骤：xxxx \n预期：xxxx (第3级)
+
+    示例格式：
+
+    # 用户登录
+    ## 正常登录-用户名密码正确
+    ### 步骤：输入正确用户名和密码点击登录\n预期：登录成功并进入首页
+    ## 异常登录-密码错误
+    ### 步骤：输入正确用户名和错误密码点击登录\n预期：提示“密码错误”
+
+    【测试设计要求】
+
+    每个功能需要覆盖以下测试维度：
+
+    1 功能测试
+    2 异常场景
+    3 边界值测试
+    4 用户误操作
+    5 权限测试
+    6 网络异常
+    7 数据异常
+    8 UI交互
+    9 接口异常
+
+    【步骤编写规则】
+
+    步骤必须：
+
+    * 简洁
+    * 一句话描述
+    * 可直接执行
+
+    例如：
+
+    步骤：点击首页推荐短剧
+    预期：进入短剧播放页
+
+    不要写：
+
+    ❌ 打开浏览器进入系统然后点击按钮
+
+    【预期结果规则】
+
+    预期结果必须：
+
+    * 明确
+    * 可验证
+    * 一句话描述
+
+    例如：
+
+    预期：提示“用户名不能为空”
+    预期：页面跳转至短剧播放页
+    预期：返回错误码401
 
     【输出规则】
-    1. 只输出 Markdown 结构。
-    2. 不需要解释说明。
-    3. 必须保证层级清晰。
-    4. 保证测试覆盖率尽可能全面。
+
+    1 只输出思维导图结构
+    2 不需要解释
+    3 层级清晰
+    4 请保证每个功能生成 8-15 个测试点
+    5 步骤与预期尽量简洁（非常重要）
+    6 输出内容可以直接复制到 XMind
 
     **需求文档内容如下：**
     ${requirementText}
