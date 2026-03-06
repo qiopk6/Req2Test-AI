@@ -1,0 +1,5 @@
+{
+  "name": "Requirement2Test - AI Test Case Generator",
+  "description": "Upload product requirement documents (PDF, Word, MD) and generate comprehensive test cases using Gemini AI.",
+  "requestFramePermissions": []
+}
