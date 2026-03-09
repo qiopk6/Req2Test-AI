@@ -34,7 +34,10 @@ import {
 import { historyService, type HistoryRecord } from './services/history';
 import { exportToExcel, exportToXMind } from './utils/exportUtils';
 import Markdown from 'react-markdown';
-import { Shield, Zap, Target, Activity } from 'lucide-react';
+import rehypeSlug from 'rehype-slug';
+import { Shield, Zap, Target, Activity, Plus, FolderOpen, Settings, List } from 'lucide-react';
+import { projectService, type Project } from './services/projectService';
+import { updateProjectOutline } from './services/gemini';
 
 declare global {
   interface Window {
@@ -62,7 +65,7 @@ export default function App() {
   const [analysisReport, setAnalysisReport] = useState<string>('');
   const [revisedDocument, setRevisedDocument] = useState<string>('');
   const [analysisTab, setAnalysisTab] = useState<'report' | 'revised'>('report');
-  const [generationMode, setGenerationMode] = useState<'matrix' | 'xmind' | 'analysis'>('matrix');
+  const [generationMode, setGenerationMode] = useState<'matrix' | 'xmind' | 'analysis' | 'outline'>('matrix');
   const [sourceType, setSourceType] = useState<'original' | 'revised' | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('全部');
@@ -77,9 +80,47 @@ export default function App() {
   const [isIncremental, setIsIncremental] = useState(false);
   const [oldFile, setOldFile] = useState<File | null>(null);
   const [oldParsedText, setOldParsedText] = useState<string>('');
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [showProjectModal, setShowProjectModal] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+
+  const extractTOC = (markdown: string) => {
+    const lines = markdown.split('\n');
+    const toc: { level: number; text: string; id: string }[] = [];
+    
+    lines.forEach(line => {
+      const match = line.match(/^(#{1,3})\s+(.+)$/);
+      if (match) {
+        const level = match[1].length;
+        const text = match[2].trim();
+        // Simple slugify logic that matches rehype-slug
+        const id = text.toLowerCase()
+          .replace(/[^\w\u4e00-\u9fa5\s-]/g, '') // Support Chinese characters
+          .replace(/\s+/g, '-')
+          .replace(/-+/g, '-');
+        toc.push({ level, text, id });
+      }
+    });
+    
+    return toc;
+  };
+
+  const scrollToId = (id: string) => {
+    const element = document.getElementById(id);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+  const [showOutline, setShowOutline] = useState(false);
 
   React.useEffect(() => {
     setHistory(historyService.getAll());
+    const allProjects = projectService.getAll();
+    setProjects(allProjects);
+    if (allProjects.length > 0) {
+      setSelectedProjectId(allProjects[0].id);
+    }
     const checkPlatformKey = async () => {
       let hasKey = false;
       if (window.aistudio?.hasSelectedApiKey) {
@@ -197,7 +238,21 @@ export default function App() {
     });
   };
 
-  const processFile = async (targetMode?: 'matrix' | 'xmind' | 'analysis', forceSource?: string) => {
+  const handleCreateProject = () => {
+    if (!newProjectName.trim()) return;
+    const newProject = projectService.save({
+      name: newProjectName,
+      outline: ''
+    });
+    setProjects(projectService.getAll());
+    setSelectedProjectId(newProject.id);
+    setNewProjectName('');
+    setShowProjectModal(false);
+  };
+
+  const currentProject = projects.find(p => p.id === selectedProjectId);
+
+  const processFile = async (targetMode?: 'matrix' | 'xmind' | 'analysis' | 'outline', forceSource?: string) => {
     const mode = targetMode || generationMode;
     let textToUse = forceSource;
     
@@ -218,6 +273,25 @@ export default function App() {
       }
       
       if (!text) return;
+
+      // Update project outline if a project is selected
+      let updatedOutline = currentProject?.outline || '';
+      if (selectedProjectId && text && !forceSource) {
+        setGenerationProgress('正在更新项目需求大纲...');
+        updatedOutline = await updateProjectOutline(updatedOutline, text, customApiKey, selectedModel);
+        projectService.save({
+          ...currentProject!,
+          outline: updatedOutline
+        });
+        setProjects(projectService.getAll());
+      }
+
+      // If we only wanted to update the outline, we can stop here
+      if (mode === 'outline') {
+        setGenerationProgress('项目大纲已更新');
+        setTimeout(() => setGenerationProgress(''), 2000);
+        return;
+      }
 
       let oldText = oldParsedText;
       if (isIncremental && !oldText && oldFile) {
@@ -249,7 +323,8 @@ export default function App() {
             customApiKey, 
             selectedModel, 
             (msg) => setGenerationProgress(msg), 
-            testStyle
+            testStyle,
+            updatedOutline
           );
           
           // Merge results
@@ -262,7 +337,7 @@ export default function App() {
           
           cases = [...mergedCases, ...result.newCases];
         } else {
-          cases = await generateTestCases(text, images, customApiKey, selectedModel, (msg) => setGenerationProgress(msg), testStyle);
+          cases = await generateTestCases(text, images, customApiKey, selectedModel, (msg) => setGenerationProgress(msg), testStyle, updatedOutline);
         }
 
         setTestCases(cases);
@@ -278,7 +353,7 @@ export default function App() {
           testCases: cases
         });
       } else if (mode === 'xmind') {
-        const xmind = await generateXMindContent(text, images, customApiKey, selectedModel, testStyle);
+        const xmind = await generateXMindContent(text, images, customApiKey, selectedModel, testStyle, updatedOutline);
         setXmindContent(xmind);
         setTestCases([]);
         setAnalysisReport('');
@@ -382,6 +457,107 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-slate-900 font-sans selection:bg-indigo-100">
+      {/* Project Modals */}
+      <AnimatePresence>
+        {showProjectModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6">
+                <h3 className="text-lg font-bold text-slate-900 mb-4">新建项目</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">项目名称</label>
+                    <input
+                      type="text"
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      placeholder="输入项目名称，如：电商平台 V2.0"
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                      autoFocus
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    创建项目后，上传的需求将自动整理到该项目的“总体需求大纲”中。
+                  </p>
+                </div>
+              </div>
+              <div className="bg-slate-50 p-4 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowProjectModal(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleCreateProject}
+                  disabled={!newProjectName.trim()}
+                  className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition-all"
+                >
+                  创建项目
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showOutline && currentProject && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">项目总体需求大纲</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">项目：{currentProject.name} | 自动整理自上传的需求文档</p>
+                </div>
+                <button
+                  onClick={() => setShowOutline(false)}
+                  className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-all"
+                >
+                  <Plus className="w-6 h-6 rotate-45" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
+                {currentProject.outline ? (
+                  <div className="prose prose-slate prose-sm max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900">
+                    <Markdown>{currentProject.outline}</Markdown>
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-center py-20">
+                    <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mb-4">
+                      <FileText className="w-8 h-8 text-slate-300" />
+                    </div>
+                    <h4 className="text-slate-900 font-semibold">暂无大纲内容</h4>
+                    <p className="text-sm text-slate-500 mt-2 max-w-xs">
+                      请先上传一份需求文档，AI 将自动为您整理并生成该项目的总体需求大纲。
+                    </p>
+                  </div>
+                )}
+              </div>
+              <div className="p-4 border-t border-slate-100 bg-white flex justify-between items-center">
+                <p className="text-[10px] text-slate-400">
+                  提示：大纲将作为生成测试用例的业务背景，确保用例符合真实业务场景。
+                </p>
+                <button
+                  onClick={() => setShowOutline(false)}
+                  className="px-6 py-2 bg-slate-900 text-white text-sm font-bold rounded-xl hover:bg-slate-800 transition-all"
+                >
+                  关闭
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -393,7 +569,56 @@ export default function App() {
               <h1 className="text-xl font-bold tracking-tight text-slate-900">需求转测试 <span className="text-indigo-600">AI</span></h1>
             </div>
 
-            <nav className="hidden md:flex items-center gap-1 ml-8 self-stretch">
+            <div className="h-8 w-px bg-slate-200 mx-2 hidden md:block" />
+
+            {/* Project Selector */}
+            <div className="flex items-center gap-2">
+              <div className="relative group">
+                <select
+                  value={selectedProjectId}
+                  onChange={(e) => setSelectedProjectId(e.target.value)}
+                  className="pl-9 pr-8 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all appearance-none cursor-pointer min-w-[140px]"
+                >
+                  <option value="" disabled>选择项目</option>
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <FolderOpen className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+              </div>
+              <button
+                onClick={() => setShowProjectModal(true)}
+                className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                title="新建项目"
+              >
+                <Plus className="w-5 h-5" />
+              </button>
+              {currentProject && (
+                <button
+                  onClick={() => setShowOutline(true)}
+                  className="px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-all flex items-center gap-1.5"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  项目大纲
+                </button>
+              )}
+            </div>
+
+            <nav className="hidden md:flex items-center gap-1 ml-4 self-stretch">
+              <button 
+                onClick={() => setGenerationMode('outline')}
+                className={cn(
+                  "px-4 text-sm font-semibold transition-all relative flex items-center gap-2 h-full",
+                  generationMode === 'outline' ? "text-indigo-600" : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+                )}
+              >
+                <FileText className="w-4 h-4" />
+                项目大纲
+                {generationMode === 'outline' && (
+                  <motion.div layoutId="nav-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />
+                )}
+              </button>
               <button 
                 onClick={() => setGenerationMode('analysis')}
                 className={cn(
@@ -401,7 +626,7 @@ export default function App() {
                   generationMode === 'analysis' ? "text-indigo-600" : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
                 )}
               >
-                <FileText className="w-4 h-4" />
+                <Activity className="w-4 h-4" />
                 需求评审分析
                 {generationMode === 'analysis' && (
                   <motion.div layoutId="nav-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600" />
@@ -409,7 +634,7 @@ export default function App() {
               </button>
               <button 
                 onClick={() => {
-                  if (generationMode === 'analysis') setGenerationMode('matrix');
+                  if (generationMode === 'analysis' || generationMode === 'outline') setGenerationMode('matrix');
                 }}
                 className={cn(
                   "px-4 text-sm font-semibold transition-all relative flex items-center gap-2 h-full",
@@ -439,7 +664,7 @@ export default function App() {
         <div className="mb-8 bg-indigo-900 rounded-2xl p-6 text-white shadow-xl shadow-indigo-200/50">
           <h3 className="font-semibold mb-4 flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-indigo-300" />
-            工作原理：{generationMode === 'analysis' ? '需求评审分析' : '需求转用例'}
+            工作原理：{generationMode === 'analysis' ? '需求评审分析' : generationMode === 'outline' ? '项目大纲维护' : '需求转用例'}
           </h3>
           <div className="grid md:grid-cols-3 gap-6">
             {generationMode === 'analysis' ? (
@@ -463,6 +688,30 @@ export default function App() {
                   <div>
                     <p className="font-medium text-indigo-50">生成评审报告</p>
                     <p className="text-xs text-indigo-200 mt-1">获取结构化分析报告及需求优化建议。</p>
+                  </div>
+                </div>
+              </>
+            ) : generationMode === 'outline' ? (
+              <>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">1</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">上传新需求</p>
+                    <p className="text-xs text-indigo-200 mt-1">上传任何补充需求或变更文档。</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">2</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">AI 自动整合</p>
+                    <p className="text-xs text-indigo-200 mt-1">AI 将新内容智能整合进现有大纲。</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0">3</span>
+                  <div>
+                    <p className="font-medium text-indigo-50">沉淀业务资产</p>
+                    <p className="text-xs text-indigo-200 mt-1">形成结构化的项目全貌，指导后续测试。</p>
                   </div>
                 </div>
               </>
@@ -575,94 +824,96 @@ export default function App() {
                 </AnimatePresence>
               </div>
 
-              <div className="mb-6 pb-6 border-b border-slate-100">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <div className={cn(
-                      "p-1.5 rounded-lg",
-                      isIncremental ? "bg-amber-100 text-amber-600" : "bg-slate-100 text-slate-500"
-                    )}>
-                      <History className="w-4 h-4" />
+              {generationMode !== 'outline' && (
+                <div className="mb-6 pb-6 border-b border-slate-100">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <div className={cn(
+                        "p-1.5 rounded-lg",
+                        isIncremental ? "bg-amber-100 text-amber-600" : "bg-slate-100 text-slate-500"
+                      )}>
+                        <History className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">增量更新模式</h3>
+                        <p className="text-[10px] text-slate-500">对比 V1.0 与 V1.1，仅生成变更用例</p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-900">增量更新模式</h3>
-                      <p className="text-[10px] text-slate-500">对比 V1.0 与 V1.1，仅生成变更用例</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setIsIncremental(!isIncremental)}
-                    className={cn(
-                      "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
-                      isIncremental ? "bg-indigo-600" : "bg-slate-200"
-                    )}
-                  >
-                    <span
+                    <button
+                      onClick={() => setIsIncremental(!isIncremental)}
                       className={cn(
-                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
-                        isIncremental ? "translate-x-6" : "translate-x-1"
+                        "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
+                        isIncremental ? "bg-indigo-600" : "bg-slate-200"
                       )}
-                    />
-                  </button>
-                </div>
-
-                <AnimatePresence>
-                  {isIncremental && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      className="overflow-hidden"
                     >
-                      <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 mb-4">
-                        <p className="text-xs text-amber-700 leading-relaxed">
-                          <strong>提示：</strong> 请先上传<b>旧版本 (V1.0)</b> 或确保当前已有测试用例，然后再上传<b>新版本 (V1.1)</b>。AI 将自动分析差异。
-                        </p>
-                      </div>
-                      
-                      <div 
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          const f = e.dataTransfer.files[0];
-                          if (f) handleFile(f, true);
-                        }}
+                      <span
                         className={cn(
-                          "border-2 border-dashed rounded-xl p-4 transition-all flex flex-col items-center justify-center text-center cursor-pointer mb-2",
-                          oldFile ? "border-amber-200 bg-amber-50/30" : "border-slate-200 hover:border-amber-400 hover:bg-slate-50"
+                          "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                          isIncremental ? "translate-x-6" : "translate-x-1"
                         )}
-                        onClick={() => document.getElementById('oldFileInput')?.click()}
+                      />
+                    </button>
+                  </div>
+
+                  <AnimatePresence>
+                    {isIncremental && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden"
                       >
-                        <input 
-                          id="oldFileInput"
-                          type="file" 
-                          className="hidden" 
-                          accept=".pdf,.docx,.md,.txt"
-                          onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0], true)}
-                        />
-                        {oldFile ? (
-                          <div className="flex items-center gap-2">
-                            <FileText className="w-4 h-4 text-amber-600" />
-                            <span className="text-xs font-medium text-slate-700 truncate max-w-[150px]">{oldFile.name}</span>
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); setOldFile(null); setOldParsedText(''); }}
-                              className="p-1 hover:bg-amber-100 rounded-full text-slate-400 hover:text-red-500 transition-colors"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="space-y-1">
-                            <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center mx-auto">
-                              <FileUp className="w-4 h-4 text-slate-400" />
+                        <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 mb-4">
+                          <p className="text-xs text-amber-700 leading-relaxed">
+                            <strong>提示：</strong> 请先上传<b>旧版本 (V1.0)</b> 或确保当前已有测试用例，然后再上传<b>新版本 (V1.1)</b>。AI 将自动分析差异。
+                          </p>
+                        </div>
+                        
+                        <div 
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const f = e.dataTransfer.files[0];
+                            if (f) handleFile(f, true);
+                          }}
+                          className={cn(
+                            "border-2 border-dashed rounded-xl p-4 transition-all flex flex-col items-center justify-center text-center cursor-pointer mb-2",
+                            oldFile ? "border-amber-200 bg-amber-50/30" : "border-slate-200 hover:border-amber-400 hover:bg-slate-50"
+                          )}
+                          onClick={() => document.getElementById('oldFileInput')?.click()}
+                        >
+                          <input 
+                            id="oldFileInput"
+                            type="file" 
+                            className="hidden" 
+                            accept=".pdf,.docx,.md,.txt"
+                            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0], true)}
+                          />
+                          {oldFile ? (
+                            <div className="flex items-center gap-2">
+                              <FileText className="w-4 h-4 text-amber-600" />
+                              <span className="text-xs font-medium text-slate-700 truncate max-w-[150px]">{oldFile.name}</span>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); setOldFile(null); setOldParsedText(''); }}
+                                className="p-1 hover:bg-amber-100 rounded-full text-slate-400 hover:text-red-500 transition-colors"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
                             </div>
-                            <p className="text-[10px] text-slate-500">点击或拖拽上传<b>旧版 PRD</b></p>
-                          </div>
-                        )}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+                          ) : (
+                            <div className="space-y-1">
+                              <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center mx-auto">
+                                <FileUp className="w-4 h-4 text-slate-400" />
+                              </div>
+                              <p className="text-[10px] text-slate-500">点击或拖拽上传<b>旧版 PRD</b></p>
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
 
               <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
                 <FileUp className="w-5 h-5 text-indigo-600" />
@@ -936,7 +1187,7 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      {(testCases.length > 0 || xmindContent || analysisReport || revisedDocument) ? '重新生成' : '开始分析生成'}
+                      {generationMode === 'outline' ? '更新项目大纲' : (testCases.length > 0 || xmindContent || analysisReport || revisedDocument) ? '重新生成' : '开始分析生成'}
                     </>
                   )}
                 </button>
@@ -971,9 +1222,116 @@ export default function App() {
 
           {/* Right Column: Results */}
           <div className="lg:col-span-8 space-y-6">
-            {((generationMode === 'matrix' && !testCases.length) || 
+            {(isParsing || isGenerating) ? (
+              <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-center p-8 bg-white rounded-2xl border border-slate-200">
+                <div className="relative w-24 h-24 mb-6">
+                  <div className="absolute inset-0 border-4 border-indigo-100 rounded-full"></div>
+                  <div className="absolute inset-0 border-4 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <CheckCircle2 className="w-8 h-8 text-indigo-600 animate-pulse" />
+                  </div>
+                </div>
+                <h3 className="text-xl font-bold text-slate-900">AI 正在思考...</h3>
+                <p className="text-slate-500 mt-2">{generationProgress || '正在分析需求并构建测试场景。'}</p>
+                <div className="mt-8 w-full max-w-xs bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                  <motion.div 
+                    className="bg-indigo-600 h-full"
+                    initial={{ width: "0%" }}
+                    animate={{ width: isParsing ? "30%" : "90%" }}
+                    transition={{ duration: 2 }}
+                  />
+                </div>
+              </div>
+            ) : generationMode === 'outline' ? (
+              <div className="space-y-4">
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col min-h-[600px]">
+                  <div className="flex items-center justify-between mb-6 pb-6 border-b border-slate-100">
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900">项目总体需求大纲</h3>
+                      <p className="text-sm text-slate-500 mt-1">
+                        项目：<span className="font-semibold text-indigo-600">{currentProject?.name || '未选择项目'}</span>
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => {
+                          if (currentProject?.outline) {
+                            const blob = new Blob([currentProject.outline], { type: 'text/markdown;charset=utf-8;' });
+                            const link = document.createElement("a");
+                            const url = URL.createObjectURL(blob);
+                            link.setAttribute("href", url);
+                            link.setAttribute("download", `项目大纲_${currentProject.name}.md`);
+                            link.click();
+                          }
+                        }}
+                        disabled={!currentProject?.outline}
+                        className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-xl hover:bg-slate-50 transition-all disabled:opacity-50"
+                      >
+                        <Download className="w-4 h-4" />
+                        导出 Markdown
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 flex gap-8 overflow-hidden">
+                    {currentProject?.outline ? (
+                      <>
+                        {/* TOC Sidebar */}
+                        <div className="w-64 shrink-0 border-r border-slate-100 pr-6 overflow-y-auto hidden md:block">
+                          <div className="flex items-center gap-2 mb-4 text-slate-900 font-bold">
+                            <List className="w-4 h-4" />
+                            <span>目录</span>
+                          </div>
+                          <nav className="space-y-1">
+                            {extractTOC(currentProject.outline).map((item, idx) => (
+                              <button
+                                key={idx}
+                                onClick={() => scrollToId(item.id)}
+                                className={cn(
+                                  "w-full text-left text-sm py-1.5 px-3 rounded-lg transition-all hover:bg-slate-50",
+                                  item.level === 1 ? "font-bold text-slate-900" : 
+                                  item.level === 2 ? "pl-6 text-slate-600" : "pl-9 text-slate-500"
+                                )}
+                              >
+                                {item.text}
+                              </button>
+                            ))}
+                          </nav>
+                        </div>
+
+                        {/* Content Area */}
+                        <div className="flex-1 overflow-y-auto pr-2">
+                          <div className="prose prose-slate max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900 prose-pre:bg-slate-900 prose-pre:text-slate-100">
+                            <Markdown rehypePlugins={[rehypeSlug]}>{currentProject.outline}</Markdown>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-center py-20">
+                        <div className="w-20 h-20 bg-slate-50 rounded-3xl flex items-center justify-center mb-6">
+                          <FileText className="w-10 h-10 text-slate-300" />
+                        </div>
+                        <h4 className="text-xl font-bold text-slate-900">暂无项目大纲</h4>
+                        <p className="text-slate-500 mt-3 max-w-sm mx-auto">
+                          请在左侧上传需求文档，并点击“更新项目大纲”，AI 将自动为您整理并沉淀该项目的业务全貌。
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {currentProject?.outline && (
+                    <div className="mt-8 p-4 bg-indigo-50 rounded-xl border border-indigo-100 flex items-start gap-3">
+                      <Sparkles className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-indigo-800 leading-relaxed">
+                        <strong>提示：</strong> 该大纲是项目的核心业务资产。在“需求转用例”模式下，AI 将始终以此大纲作为业务背景，确保生成的测试用例精准覆盖真实业务场景。
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : ((generationMode === 'matrix' && !testCases.length) || 
               (generationMode === 'xmind' && !xmindContent) || 
-              (generationMode === 'analysis' && !analysisReport && !revisedDocument)) && !isParsing && !isGenerating ? (
+              (generationMode === 'analysis' && !analysisReport && !revisedDocument)) ? (
               <div className="h-full min-h-[400px] flex flex-col items-center justify-center text-center p-8 bg-white rounded-2xl border border-slate-200 border-dashed">
                 <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
                   <FileText className="w-8 h-8 text-slate-300" />

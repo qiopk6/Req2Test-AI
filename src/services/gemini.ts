@@ -84,15 +84,73 @@ async function extractModules(
   }
 }
 
+export async function updateProjectOutline(
+  currentOutline: string,
+  newRequirement: string,
+  customApiKey?: string,
+  modelName: string = "gemini-3-flash-preview"
+): Promise<string> {
+  const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
+  
+  const prompt = `
+    你是一名资深需求架构师。请根据新上传的需求文档，更新并完善现有的【项目总体需求大纲】。
+    
+    **目标：**
+    维护一份反映项目全貌的、结构化的需求大纲。这份大纲将作为后续生成测试用例的核心业务背景。
+    
+    **要求：**
+    1. **功能拆分**：将各个大功能拆分成独立的章节（使用 ## 标题），每个章节应包含该功能的详细需求、业务规则和逻辑流程。
+    2. **整合与去重**：将新需求中的功能点、业务流程、业务规则整合到现有大纲中。如果新需求是对现有功能的修改，请更新相应部分。
+    3. **保持结构化**：使用清晰的 Markdown 层级结构（模块 -> 功能点 -> 核心规则）。
+    4. **突出业务逻辑**：重点记录业务流程、状态流转、核心算法、权限控制等关键逻辑。
+    5. **简洁而全面**：不需要保留文档中的所有废话，但必须保留所有具有业务价值的信息。
+    6. **全局规则：所有输出内容必须使用中文。**
+
+    **现有大纲：**
+    ${currentOutline || "（暂无现有大纲）"}
+
+    **新上传的需求文档：**
+    ${newRequirement}
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: { parts: [{ text: prompt }] }
+    });
+
+    return response.text || currentOutline;
+  } catch (error) {
+    console.error("Error updating project outline:", error);
+    return currentOutline;
+  }
+}
+
 export async function generateTestCases(
   requirementText: string, 
   images?: ImageContent[], 
   customApiKey?: string,
   modelName: string = "gemini-3-flash-preview",
   onProgress?: (message: string) => void,
-  style: TestStyle = 'standard'
+  style: TestStyle = 'standard',
+  projectOutline?: string
 ): Promise<TestCase[]> {
   const styleInstruction = TEST_STYLES[style].instruction;
+  const businessContext = projectOutline ? `
+    **业务背景与功能边界（项目总体需求大纲）：**
+    ${projectOutline}
+    
+    请始终参考以上【项目总体需求大纲】作为业务背景。
+  ` : "";
+
+  const qualityRequirements = `
+    **生成要求（极其重要）：**
+    1. **真实业务场景**：所有测试用例必须基于该APP的实际功能模块、业务流程和业务规则。
+    2. **去通用化**：严禁生成与当前APP无关或通用化的测试场景（如通用的登录、注册模板，除非需求中明确定义了这些逻辑）。
+    3. **逻辑一致性**：测试点、步骤和预期结果需与需求中的页面结构、接口逻辑和业务规则保持严格一致。
+    4. **合理补充**：如需求中存在未明确说明的细节，请结合已有业务逻辑（参考大纲）进行合理补充，但不得脱离整体产品设计。
+  `;
 
   // Check if document is long (threshold: 15000 chars)
   if (requirementText.length > 15000) {
@@ -109,6 +167,9 @@ export async function generateTestCases(
         你是一名顶级软件测试专家。我将提供整个产品的功能文档。
         请针对 **${moduleName}** 模块生成**极其详尽的测试用例矩阵**。
         
+        ${businessContext}
+        ${qualityRequirements}
+
         **测试风格要求：**
         ${styleInstruction}
 
@@ -291,17 +352,35 @@ export async function generateXMindContent(
   images?: ImageContent[], 
   customApiKey?: string,
   modelName: string = "gemini-3-flash-preview",
-  style: TestStyle = 'standard'
+  style: TestStyle = 'standard',
+  projectOutline?: string
 ): Promise<string> {
   const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
   const model = modelName;
   const styleInstruction = TEST_STYLES[style].instruction;
   
+  const businessContext = projectOutline ? `
+    **业务背景与功能边界（项目总体需求大纲）：**
+    ${projectOutline}
+    
+    请始终参考以上【项目总体需求大纲】作为业务背景。
+  ` : "";
+
+  const qualityRequirements = `
+    **生成要求（极其重要）：**
+    1. **真实业务场景**：所有测试点必须基于该APP的实际功能模块、业务流程和业务规则。
+    2. **去通用化**：严禁生成与当前APP无关或通用化的测试场景。
+    3. **逻辑一致性**：测试点、步骤和预期结果需与需求中的页面结构、接口逻辑和业务规则保持严格一致。
+  `;
+
   const prompt = `
     你是一名拥有10年以上经验的软件测试专家，擅长测试分析和测试设计。
 
     我会提供产品需求文档（PRD）或功能说明，你需要根据需求内容生成 **XMind结构的测试用例思维导图**。
+
+    ${businessContext}
+    ${qualityRequirements}
 
     **测试风格要求：**
     ${styleInstruction}
@@ -531,17 +610,35 @@ export async function generateIncrementalTestCases(
   customApiKey?: string,
   modelName: string = "gemini-3-flash-preview",
   onProgress?: (message: string) => void,
-  style: TestStyle = 'standard'
+  style: TestStyle = 'standard',
+  projectOutline?: string
 ): Promise<{ newCases: TestCase[]; updatedCases: TestCase[]; deletedIds: string[] }> {
   const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
   const styleInstruction = TEST_STYLES[style].instruction;
+
+  const businessContext = projectOutline ? `
+    **业务背景与功能边界（项目总体需求大纲）：**
+    ${projectOutline}
+    
+    请始终参考以上【项目总体需求大纲】作为业务背景。
+  ` : "";
+
+  const qualityRequirements = `
+    **生成要求（极其重要）：**
+    1. **真实业务场景**：所有测试用例必须基于该APP的实际功能模块、业务流程和业务规则。
+    2. **去通用化**：严禁生成与当前APP无关或通用化的测试场景。
+    3. **逻辑一致性**：测试点、步骤和预期结果需与需求中的页面结构、接口逻辑和业务规则保持严格一致。
+  `;
 
   onProgress?.("正在对比需求变更并生成增量测试用例...");
 
   const prompt = `
     你是一名资深软件测试专家。我将提供两个版本的需求文档（旧版 V1.0 和新版 V1.1），以及现有的测试用例列表。
     请分析需求变更，并输出“测试用例补丁”。
+
+    ${businessContext}
+    ${qualityRequirements}
 
     **输入数据：**
     1. **旧版需求 (V1.0)**: 
