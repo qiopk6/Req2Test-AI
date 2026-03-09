@@ -13,17 +13,177 @@ export interface TestCase {
   remarks: string;
 }
 
+export type TestStyle = 'standard' | 'strict' | 'fast' | 'security';
+
+export const TEST_STYLES = {
+  standard: {
+    name: '标准模式',
+    description: '平衡覆盖率与效率，适用于日常测试。',
+    instruction: '平衡功能覆盖与异常场景，生成全面的测试用例。'
+  },
+  strict: {
+    name: '严格模式',
+    description: '侧重边界值、极值、非法输入及复杂的逻辑校验。',
+    instruction: '重点关注边界值测试、极值测试、非法输入校验以及复杂的业务逻辑组合场景。'
+  },
+  fast: {
+    name: '快速模式',
+    description: '侧重主流程冒烟测试，快速验证核心功能。',
+    instruction: '侧重于核心业务流程（Happy Path）和冒烟测试，确保主流程畅通。'
+  },
+  security: {
+    name: '安全专项',
+    description: '侧重越权、注入、敏感数据泄露及权限控制。',
+    instruction: '重点关注安全性测试，包括水平/垂直越权、SQL注入、XSS、敏感信息泄露、权限控制及身份验证。'
+  }
+};
+
 export interface ImageContent {
   data: string;
   mimeType: string;
+}
+
+async function extractModules(
+  requirementText: string,
+  customApiKey?: string,
+  modelName: string = "gemini-3-flash-preview"
+): Promise<string[]> {
+  const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
+  
+  const prompt = `
+    你是一名资深需求分析师。请阅读以下需求文档，并将其拆分为多个独立的功能模块或业务流程。
+    
+    **要求：**
+    1. 提取出的模块应该是逻辑独立的，方便后续针对每个模块生成详细的测试用例。
+    2. 模块数量不宜过多或过少（通常 5-10 个为佳，取决于文档复杂度）。
+    3. 只返回模块名称列表。
+
+    **需求文档内容：**
+    ${requirementText.substring(0, 30000)} ... (仅截取部分用于提取目录)
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: { parts: [{ text: prompt }] },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING }
+        }
+      }
+    });
+
+    return JSON.parse(response.text || "[]");
+  } catch (error) {
+    console.error("Error extracting modules:", error);
+    return ["核心功能流程"]; // Fallback
+  }
 }
 
 export async function generateTestCases(
   requirementText: string, 
   images?: ImageContent[], 
   customApiKey?: string,
-  modelName: string = "gemini-3-flash-preview"
+  modelName: string = "gemini-3-flash-preview",
+  onProgress?: (message: string) => void,
+  style: TestStyle = 'standard'
 ): Promise<TestCase[]> {
+  const styleInstruction = TEST_STYLES[style].instruction;
+
+  // Check if document is long (threshold: 15000 chars)
+  if (requirementText.length > 15000) {
+    onProgress?.("文档较长，正在提取功能模块以进行分段分析...");
+    const modules = await extractModules(requirementText, customApiKey, modelName);
+    let allTestCases: TestCase[] = [];
+    
+    // Process each module sequentially to avoid hitting rate limits too hard and to stay organized
+    for (let i = 0; i < modules.length; i++) {
+      const moduleName = modules[i];
+      onProgress?.(`正在生成模块 [${moduleName}] 的测试用例 (${i + 1}/${modules.length})...`);
+      
+      const modulePrompt = `
+        你是一名顶级软件测试专家。我将提供整个产品的功能文档。
+        请针对 **${moduleName}** 模块生成**极其详尽的测试用例矩阵**。
+        
+        **测试风格要求：**
+        ${styleInstruction}
+
+        **关键目标：**
+        1. **深度挖掘**：深入挖掘该模块中的每一个功能点、每一个输入框、每一个按钮、每一个接口参数。
+        2. **多维度覆盖**：UI交互、表单验证、异常场景、边界值、权限校验等。
+
+        **用例结构要求：**
+        - 模块名称：必须使用 "${moduleName}"。
+        - 用例编号：MOD_TC_XXX 格式。
+        - 用例标题、测试类型、前置条件、测试步骤、输入数据、预期结果、优先级、备注。
+
+        **需求文档全文如下：**
+        ${requirementText}
+      `;
+
+      const moduleParts: any[] = [{ text: modulePrompt }];
+      if (images && images.length > 0) {
+        images.forEach(img => {
+          moduleParts.push({
+            inlineData: {
+              mimeType: img.mimeType,
+              data: img.data.split(',')[1] || img.data
+            }
+          });
+        });
+      }
+
+      const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+      const ai = new GoogleGenAI({ apiKey });
+      
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: { parts: moduleParts },
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  module: { type: Type.STRING },
+                  id: { type: Type.STRING },
+                  title: { type: Type.STRING },
+                  type: { type: Type.STRING },
+                  preconditions: { type: Type.STRING },
+                  steps: { 
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING }
+                  },
+                  inputData: { type: Type.STRING },
+                  expectedResult: { type: Type.STRING },
+                  priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                  remarks: { type: Type.STRING }
+                },
+                required: ["module", "id", "title", "type", "preconditions", "steps", "inputData", "expectedResult", "priority", "remarks"]
+              }
+            }
+          }
+        });
+
+        if (response.text) {
+          const moduleCases = JSON.parse(response.text);
+          allTestCases = [...allTestCases, ...moduleCases];
+        }
+      } catch (e) {
+        console.error(`Error generating cases for module ${moduleName}:`, e);
+        // Continue to next module even if one fails
+      }
+    }
+    
+    if (allTestCases.length > 0) return allTestCases;
+    // If all failed or returned empty, fall back to normal generation
+  }
+
   const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
   const model = modelName;
@@ -31,6 +191,9 @@ export async function generateTestCases(
   const prompt = `
     你是一名顶级软件测试专家。我将提供整个产品的功能文档、页面设计和接口列表。请帮我生成**极其详尽的全套测试用例矩阵**。
     
+    **测试风格要求：**
+    ${styleInstruction}
+
     **关键目标：**
     1. **穷尽性测试**：不要只生成几个示例。你需要深入挖掘文档中的每一个功能点、每一个输入框、每一个按钮、每一个接口参数。
     2. **数量要求**：请根据文档复杂度生成尽可能多的用例（目标 30-50 条以上，如果文档复杂则更多）。必须确保覆盖所有模块。
@@ -124,16 +287,21 @@ export async function generateXMindContent(
   requirementText: string, 
   images?: ImageContent[], 
   customApiKey?: string,
-  modelName: string = "gemini-3-flash-preview"
+  modelName: string = "gemini-3-flash-preview",
+  style: TestStyle = 'standard'
 ): Promise<string> {
   const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
   const model = modelName;
+  const styleInstruction = TEST_STYLES[style].instruction;
   
   const prompt = `
     你是一名拥有10年以上经验的软件测试专家，擅长测试分析和测试设计。
 
     我会提供产品需求文档（PRD）或功能说明，你需要根据需求内容生成 **XMind结构的测试用例思维导图**。
+
+    **测试风格要求：**
+    ${styleInstruction}
 
     【目标】
 
@@ -255,12 +423,15 @@ export async function analyzeRequirements(
   requirementText: string, 
   images?: ImageContent[], 
   customApiKey?: string,
-  modelName: string = "gemini-3-flash-preview"
+  modelName: string = "gemini-3-flash-preview",
+  style: TestStyle = 'standard'
 ): Promise<{ report: string; revisedDocument: string }> {
   const apiKey = customApiKey || process.env.API_KEY || process.env.GEMINI_API_KEY || '';
   const ai = new GoogleGenAI({ apiKey });
   const model = modelName;
-    const prompt = `
+  const styleInstruction = TEST_STYLES[style].instruction;
+
+  const prompt = `
     请扮演以下角色共同评审需求文档：
 
     - 资深产品经理
@@ -269,6 +440,9 @@ export async function analyzeRequirements(
     - 用户体验设计师
 
     请对需求文档进行多角色评审，并输出评审报告。
+
+    **评审风格要求：**
+    ${styleInstruction}
 
     重点发现：
     1 产品逻辑漏洞

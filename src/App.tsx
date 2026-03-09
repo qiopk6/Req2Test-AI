@@ -13,7 +13,9 @@ import {
   FileUp,
   Trash2,
   Key,
-  Sparkles
+  Sparkles,
+  History,
+  Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -23,10 +25,15 @@ import {
   generateTestCases, 
   generateXMindContent, 
   analyzeRequirements,
+  TEST_STYLES,
   type TestCase, 
-  type ImageContent 
+  type ImageContent,
+  type TestStyle
 } from './services/gemini';
+import { historyService, type HistoryRecord } from './services/history';
+import { exportToExcel, exportToXMind } from './utils/exportUtils';
 import Markdown from 'react-markdown';
+import { Shield, Zap, Target, Activity } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -47,6 +54,7 @@ export default function App() {
   const [designFiles, setDesignFiles] = useState<File[]>([]);
   const [isParsing, setIsParsing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [xmindContent, setXmindContent] = useState<string>('');
@@ -60,10 +68,14 @@ export default function App() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [customApiKey, setCustomApiKey] = useState('');
   const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
+  const [testStyle, setTestStyle] = useState<TestStyle>('standard');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [history, setHistory] = useState<HistoryRecord[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const [hasPlatformKey, setHasPlatformKey] = useState(false);
 
   React.useEffect(() => {
+    setHistory(historyService.getAll());
     const checkPlatformKey = async () => {
       let hasKey = false;
       if (window.aistudio?.hasSelectedApiKey) {
@@ -150,6 +162,23 @@ export default function App() {
     setDesignFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const loadHistoryRecord = (record: HistoryRecord) => {
+    setGenerationMode(record.mode);
+    setTestStyle(record.style);
+    if (record.testCases) setTestCases(record.testCases);
+    if (record.xmindContent) setXmindContent(record.xmindContent);
+    if (record.analysisReport) setAnalysisReport(record.analysisReport);
+    if (record.revisedDocument) setRevisedDocument(record.revisedDocument);
+    setError(null);
+    // Scroll to results
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const deleteHistoryRecord = (id: string) => {
+    historyService.delete(id);
+    setHistory(historyService.getAll());
+  };
+
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -182,6 +211,7 @@ export default function App() {
       if (!text) return;
       
       setIsGenerating(true);
+      setGenerationProgress('正在准备生成...');
 
       let images: ImageContent[] = [];
       if (designFiles.length > 0) {
@@ -192,27 +222,50 @@ export default function App() {
       }
 
       if (mode === 'matrix') {
-        const cases = await generateTestCases(text, images, customApiKey, selectedModel);
+        const cases = await generateTestCases(text, images, customApiKey, selectedModel, (msg) => setGenerationProgress(msg), testStyle);
         setTestCases(cases);
         setXmindContent('');
         setAnalysisReport('');
         setRevisedDocument('');
         setGenerationMode('matrix');
+        
+        historyService.save({
+          mode: 'matrix',
+          style: testStyle,
+          fileName: file?.name || '粘贴文本',
+          testCases: cases
+        });
       } else if (mode === 'xmind') {
-        const xmind = await generateXMindContent(text, images, customApiKey, selectedModel);
+        const xmind = await generateXMindContent(text, images, customApiKey, selectedModel, testStyle);
         setXmindContent(xmind);
         setTestCases([]);
         setAnalysisReport('');
         setRevisedDocument('');
         setGenerationMode('xmind');
+
+        historyService.save({
+          mode: 'xmind',
+          style: testStyle,
+          fileName: file?.name || '粘贴文本',
+          xmindContent: xmind
+        });
       } else {
-        const result = await analyzeRequirements(text, images, customApiKey, selectedModel);
+        const result = await analyzeRequirements(text, images, customApiKey, selectedModel, testStyle);
         setAnalysisReport(result.report);
         setRevisedDocument(result.revisedDocument);
         setTestCases([]);
         setXmindContent('');
         setGenerationMode('analysis');
+
+        historyService.save({
+          mode: 'analysis',
+          style: testStyle,
+          fileName: file?.name || '粘贴文本',
+          analysisReport: result.report,
+          revisedDocument: result.revisedDocument
+        });
       }
+      setHistory(historyService.getAll());
     } catch (err) {
       setError(err instanceof Error ? err.message : '发生意外错误。');
     } finally {
@@ -221,46 +274,16 @@ export default function App() {
     }
   };
 
-  const exportToCSV = () => {
+  const handleExportExcel = () => {
     if (sortedCases.length === 0) return;
-    
-    const headers = ['模块/接口', '用例编号', '标题', '类型', '前置条件', '步骤', '输入数据', '预期结果', '优先级', '备注'];
-    const rows = sortedCases.map(tc => [
-      `"${tc.module.replace(/"/g, '""')}"`,
-      tc.id,
-      `"${tc.title.replace(/"/g, '""')}"`,
-      tc.type,
-      `"${tc.preconditions.replace(/"/g, '""')}"`,
-      `"${tc.steps.join('\n').replace(/"/g, '""')}"`,
-      `"${tc.inputData.replace(/"/g, '""')}"`,
-      `"${tc.expectedResult.replace(/"/g, '""')}"`,
-      tc.priority,
-      `"${tc.remarks.replace(/"/g, '""')}"`
-    ]);
-
-    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
-    const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Excel模式_${file?.name.split('.')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const name = `测试用例_${file?.name.split('.')[0] || '未命名'}.xlsx`;
+    exportToExcel(sortedCases, name);
   };
 
-  const exportToXMind = () => {
+  const handleExportXMind = async () => {
     if (!xmindContent) return;
-    const blob = new Blob([xmindContent], { type: 'text/markdown;charset=utf-8;' });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Xmind模式_${file?.name.split('.')[0]}.md`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const name = `测试导图_${file?.name.split('.')[0] || '未命名'}.xmind`;
+    await exportToXMind(xmindContent, name);
   };
 
   const exportAnalysisReport = () => {
@@ -649,6 +672,37 @@ export default function App() {
                   </div>
 
                   <div className="space-y-2">
+                    <h3 className="text-sm font-semibold text-slate-700">测试风格</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(Object.keys(TEST_STYLES) as TestStyle[]).map((style) => {
+                        const Icon = style === 'standard' ? Activity : 
+                                     style === 'strict' ? Target : 
+                                     style === 'fast' ? Zap : Shield;
+                        return (
+                          <button
+                            key={style}
+                            onClick={() => setTestStyle(style)}
+                            className={cn(
+                              "flex flex-col items-start p-2 rounded-xl border transition-all text-left",
+                              testStyle === style 
+                                ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600" 
+                                : "border-slate-200 bg-white hover:border-indigo-300"
+                            )}
+                          >
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <Icon className={cn("w-3 h-3", testStyle === style ? "text-indigo-600" : "text-slate-400")} />
+                              <span className={cn("text-[10px] font-bold", testStyle === style ? "text-indigo-900" : "text-slate-700")}>
+                                {TEST_STYLES[style].name}
+                              </span>
+                            </div>
+                            <p className="text-[8px] text-slate-500 line-clamp-1">{TEST_STYLES[style].description}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
                     <h3 className="text-sm font-semibold text-slate-700">视图模式</h3>
                     <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
                       <button
@@ -670,6 +724,70 @@ export default function App() {
                         Xmind模式
                       </button>
                     </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-100">
+                    <button 
+                      onClick={() => setShowHistory(!showHistory)}
+                      className="flex items-center justify-between w-full text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <History className="w-4 h-4" />
+                        历史记录 ({history.length})
+                      </div>
+                      <ChevronDown className={cn("w-4 h-4 transition-transform", showHistory && "rotate-180")} />
+                    </button>
+                    
+                    <AnimatePresence>
+                      {showHistory && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="overflow-hidden mt-3 space-y-2"
+                        >
+                          {history.length === 0 ? (
+                            <p className="text-xs text-slate-400 text-center py-4">暂无历史记录</p>
+                          ) : (
+                            history.map((record) => (
+                              <div 
+                                key={record.id}
+                                className="group relative bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-xl p-3 transition-all cursor-pointer"
+                                onClick={() => loadHistoryRecord(record)}
+                              >
+                                <div className="flex items-start justify-between mb-1">
+                                  <span className={cn(
+                                    "text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase",
+                                    record.mode === 'matrix' ? "bg-blue-100 text-blue-700" :
+                                    record.mode === 'xmind' ? "bg-purple-100 text-purple-700" :
+                                    "bg-amber-100 text-amber-700"
+                                  )}>
+                                    {record.mode === 'matrix' ? '矩阵' : record.mode === 'xmind' ? '导图' : '评审'}
+                                  </span>
+                                  <span className="text-[8px] text-slate-400 flex items-center gap-1">
+                                    <Clock className="w-2 h-2" />
+                                    {new Date(record.timestamp).toLocaleString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] font-medium text-slate-700 truncate pr-4">{record.fileName}</p>
+                                <div className="flex items-center gap-2 mt-1">
+                                  <span className="text-[8px] text-slate-400 italic">风格: {TEST_STYLES[record.style].name}</span>
+                                </div>
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteHistoryRecord(record.id);
+                                  }}
+                                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition-all"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               )}
@@ -744,7 +862,7 @@ export default function App() {
                   </div>
                 </div>
                 <h3 className="text-xl font-bold text-slate-900">AI 正在思考...</h3>
-                <p className="text-slate-500 mt-2">正在分析需求并构建测试场景。</p>
+                <p className="text-slate-500 mt-2">{generationProgress || '正在分析需求并构建测试场景。'}</p>
                 <div className="mt-8 w-full max-w-xs bg-slate-100 h-1.5 rounded-full overflow-hidden">
                   <motion.div 
                     className="bg-indigo-600 h-full"
@@ -781,11 +899,11 @@ export default function App() {
                       <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                     </div>
                     <button 
-                      onClick={exportToCSV}
+                      onClick={handleExportExcel}
                       className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-xl hover:bg-slate-800 transition-colors shrink-0"
                     >
                       <Download className="w-4 h-4" />
-                      导出 CSV
+                      导出 Excel
                     </button>
                   </div>
                 </div>
@@ -902,11 +1020,11 @@ export default function App() {
                     <p className="text-sm text-slate-500">可直接复制以下内容到 XMind 使用</p>
                   </div>
                   <button 
-                    onClick={exportToXMind}
+                    onClick={handleExportXMind}
                     className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-xl hover:bg-slate-800 transition-colors shrink-0"
                   >
                     <Download className="w-4 h-4" />
-                    导出 XMind 格式
+                    导出 XMind 文件
                   </button>
                 </div>
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm min-h-[500px]">
