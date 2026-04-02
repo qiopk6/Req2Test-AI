@@ -35,7 +35,7 @@ import { exportToExcel, exportToXMind } from './utils/exportUtils';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
-import { Shield, Zap, Target, Activity, Plus, FolderOpen, List } from 'lucide-react';
+import { Shield, Zap, Target, Activity, Plus, FolderOpen, List, Edit3, Save, X } from 'lucide-react';
 import { projectService, type Project } from './services/projectService';
 import { updateProjectOutline } from './services/gemini';
 
@@ -110,6 +110,9 @@ export default function App() {
     }
   };
   const [showOutline, setShowOutline] = useState(false);
+  const [isEditingOutline, setIsEditingOutline] = useState(false);
+  const [editingOutlineContent, setEditingOutlineContent] = useState('');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   React.useEffect(() => {
     setHistory(historyService.getAll());
@@ -276,13 +279,18 @@ export default function App() {
       // Update project outline if a project is selected
       let updatedOutline = currentProject?.outline || '';
       if (selectedProjectId && text && !forceSource && mode === 'outline') {
+        setIsGenerating(true);
         setGenerationProgress('正在更新项目需求大纲...');
-        updatedOutline = await updateProjectOutline(updatedOutline, text, customApiKey, selectedModel);
-        projectService.save({
-          ...currentProject!,
-          outline: updatedOutline
-        });
-        setProjects(projectService.getAll());
+        try {
+          updatedOutline = await updateProjectOutline(updatedOutline, text, customApiKey, selectedModel);
+          projectService.save({
+            ...currentProject!,
+            outline: updatedOutline
+          });
+          setProjects(projectService.getAll());
+        } finally {
+          setIsGenerating(false);
+        }
       }
 
       // If we only wanted to update the outline, we can stop here
@@ -513,22 +521,97 @@ export default function App() {
                 <p className="text-[10px] text-slate-400">
                   提示：大纲将作为生成测试用例的业务背景，确保用例符合真实业务场景。
                 </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShowOutline(false);
+                      setGenerationMode('outline');
+                      setEditingOutlineContent(currentProject.outline || '');
+                      setIsEditingOutline(true);
+                    }}
+                    disabled={!currentProject?.outline}
+                    className="px-6 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-bold rounded-xl hover:bg-slate-50 transition-all disabled:opacity-50"
+                  >
+                    编辑大纲
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowOutline(false);
+                      setGenerationMode('matrix');
+                      setSourceType('outline');
+                    }}
+                    className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 transition-all"
+                  >
+                    生成测试用例
+                  </button>
+                  <button
+                    onClick={() => setShowOutline(false)}
+                    className="px-6 py-2 bg-slate-900 text-white text-sm font-bold rounded-xl hover:bg-slate-800 transition-all"
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Clear Confirm Modal */}
+      <AnimatePresence>
+        {showClearConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+              onClick={() => setShowClearConfirm(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden relative z-10"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-3 text-red-600">
+                  <div className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center">
+                    <AlertCircle className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-lg font-bold">清空大纲</h3>
+                </div>
                 <button
-                  onClick={() => {
-                    setShowOutline(false);
-                    setGenerationMode('matrix');
-                    setSourceType('outline');
-                    processFile('matrix');
-                  }}
-                  className="px-6 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 transition-all"
+                  onClick={() => setShowClearConfirm(false)}
+                  className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-all"
                 >
-                  生成测试用例
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 bg-slate-50/50">
+                <p className="text-slate-600">
+                  确定要清空当前项目的大纲吗？此操作不可恢复。
+                </p>
+              </div>
+              <div className="p-4 border-t border-slate-100 bg-white flex justify-end gap-3">
+                <button
+                  onClick={() => setShowClearConfirm(false)}
+                  className="px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-xl hover:bg-slate-50 transition-all"
+                >
+                  取消
                 </button>
                 <button
-                  onClick={() => setShowOutline(false)}
-                  className="px-6 py-2 bg-slate-900 text-white text-sm font-bold rounded-xl hover:bg-slate-800 transition-all"
+                  onClick={() => {
+                    if (currentProject) {
+                      const updatedProject = { ...currentProject, outline: '' };
+                      projectService.save(updatedProject);
+                      setProjects(projectService.getAll());
+                    }
+                    setShowClearConfirm(false);
+                  }}
+                  className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-xl hover:bg-red-700 transition-all"
                 >
-                  关闭
+                  确定清空
                 </button>
               </div>
             </motion.div>
@@ -731,7 +814,7 @@ export default function App() {
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={onDrop}
                         className={cn(
-                          "border-2 border-dashed rounded-xl p-8 transition-all flex flex-col items-center justify-center text-center cursor-pointer mb-6",
+                          "relative group border-2 border-dashed rounded-xl p-8 transition-all flex flex-col items-center justify-center text-center cursor-pointer mb-6",
                           file ? "border-indigo-200 bg-indigo-50/30" : "border-slate-200 hover:border-indigo-400 hover:bg-slate-50"
                         )}
                         onClick={() => document.getElementById('fileInput')?.click()}
@@ -745,11 +828,27 @@ export default function App() {
                         />
                         
                         {file ? (
-                          <div className="space-y-2">
-                            <FileText className="w-10 h-10 text-indigo-600 mx-auto" />
-                            <p className="text-sm font-medium text-slate-900 truncate max-w-[200px]">{file.name}</p>
-                            <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB</p>
-                          </div>
+                          <>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFile(null);
+                                setParsedText('');
+                                if (document.getElementById('fileInput')) {
+                                  (document.getElementById('fileInput') as HTMLInputElement).value = '';
+                                }
+                              }}
+                              className="absolute top-2 right-2 p-1.5 bg-white border border-slate-200 rounded-full text-slate-400 hover:text-red-500 hover:border-red-200 shadow-sm opacity-0 group-hover:opacity-100 transition-all z-10"
+                              title="删除文件"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                            <div className="space-y-2 w-full flex flex-col items-center">
+                              <FileText className="w-10 h-10 text-indigo-600 mx-auto" />
+                              <p className="text-sm font-medium text-slate-900 truncate max-w-[200px]">{file.name}</p>
+                              <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB</p>
+                            </div>
+                          </>
                         ) : (
                           <div className="space-y-2">
                             <Upload className="w-10 h-10 text-slate-400 mx-auto" />
@@ -1102,7 +1201,7 @@ export default function App() {
                         {isParsing || isGenerating ? (
                           <>
                             <Loader2 className="w-5 h-5 animate-spin" />
-                            {isParsing ? '正在解析文档...' : 'AI 正在分析生成...'}
+                            {isParsing ? '正在解析文档...' : generationMode === 'outline' ? '正在更新大纲...' : 'AI 正在分析生成...'}
                           </>
                         ) : (
                           <>
@@ -1175,68 +1274,135 @@ export default function App() {
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => {
-                          setGenerationMode('matrix');
-                          setSourceType('outline');
-                        }}
-                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 transition-all"
-                      >
-                        <Zap className="w-4 h-4" />
-                        生成测试用例
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (currentProject?.outline) {
-                            const blob = new Blob([currentProject.outline], { type: 'text/markdown;charset=utf-8;' });
-                            const link = document.createElement("a");
-                            const url = URL.createObjectURL(blob);
-                            link.setAttribute("href", url);
-                            link.setAttribute("download", `项目大纲_${currentProject.name}.md`);
-                            link.click();
-                          }
-                        }}
-                        disabled={!currentProject?.outline}
-                        className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-xl hover:bg-slate-50 transition-all disabled:opacity-50"
-                      >
-                        <Download className="w-4 h-4" />
-                        导出 Markdown
-                      </button>
+                      {isEditingOutline ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              if (currentProject) {
+                                const updatedProject = { ...currentProject, outline: editingOutlineContent };
+                                projectService.save(updatedProject);
+                                setProjects(projectService.getAll());
+                              }
+                              setIsEditingOutline(false);
+                            }}
+                            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-xl hover:bg-emerald-700 transition-all"
+                          >
+                            <Save className="w-4 h-4" />
+                            保存大纲
+                          </button>
+                          <button
+                            onClick={() => setIsEditingOutline(false)}
+                            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-xl hover:bg-slate-50 transition-all"
+                          >
+                            <X className="w-4 h-4" />
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              setGenerationMode('matrix');
+                              setSourceType('outline');
+                            }}
+                            disabled={!currentProject?.outline}
+                            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 transition-all disabled:opacity-50"
+                          >
+                            <Zap className="w-4 h-4" />
+                            生成测试用例
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (currentProject?.outline) {
+                                setEditingOutlineContent(currentProject.outline);
+                                setIsEditingOutline(true);
+                              }
+                            }}
+                            disabled={!currentProject?.outline}
+                            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-xl hover:bg-slate-50 transition-all disabled:opacity-50"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                            编辑大纲
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (currentProject?.outline) {
+                                const blob = new Blob([currentProject.outline], { type: 'text/markdown;charset=utf-8;' });
+                                const link = document.createElement("a");
+                                const url = URL.createObjectURL(blob);
+                                link.setAttribute("href", url);
+                                link.setAttribute("download", `项目大纲_${currentProject.name}.md`);
+                                link.click();
+                              }
+                            }}
+                            disabled={!currentProject?.outline}
+                            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-xl hover:bg-slate-50 transition-all disabled:opacity-50"
+                          >
+                            <Download className="w-4 h-4" />
+                            导出
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (currentProject) {
+                                setShowClearConfirm(true);
+                              }
+                            }}
+                            disabled={!currentProject?.outline}
+                            className="flex items-center gap-2 px-4 py-2 bg-white border border-red-200 text-red-600 text-sm font-medium rounded-xl hover:bg-red-50 transition-all disabled:opacity-50"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            清空
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
 
                   <div className="flex-1 flex gap-8">
                     {currentProject?.outline ? (
                       <>
-                        {/* TOC Sidebar */}
-                        <div className="w-64 shrink-0 border-r border-slate-100 pr-6 overflow-y-auto hidden md:block sticky top-6 self-start max-h-[calc(100vh-100px)]">
-                          <div className="flex items-center gap-2 mb-4 text-slate-900 font-bold">
-                            <List className="w-4 h-4" />
-                            <span>目录</span>
+                        {isEditingOutline ? (
+                          <div className="flex-1 flex flex-col h-full min-h-[500px]">
+                            <textarea
+                              value={editingOutlineContent}
+                              onChange={(e) => setEditingOutlineContent(e.target.value)}
+                              className="flex-1 w-full p-6 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none font-mono text-sm leading-relaxed"
+                              placeholder="在此编辑项目大纲 Markdown 内容..."
+                            />
                           </div>
-                          <nav className="space-y-1">
-                            {extractTOC(currentProject.outline).map((item, idx) => (
-                              <button
-                                key={idx}
-                                onClick={() => scrollToId(item.id)}
-                                className={cn(
-                                  "w-full text-left text-sm py-1.5 px-3 rounded-lg transition-all hover:bg-slate-50",
-                                  item.level === 1 ? "font-bold text-slate-900" : 
-                                  item.level === 2 ? "pl-6 text-slate-600" : "pl-9 text-slate-500"
-                                )}
-                              >
-                                {item.text}
-                              </button>
-                            ))}
-                          </nav>
-                        </div>
+                        ) : (
+                          <>
+                            {/* TOC Sidebar */}
+                            <div className="w-64 shrink-0 border-r border-slate-100 pr-6 overflow-y-auto hidden md:block sticky top-6 self-start max-h-[calc(100vh-100px)]">
+                              <div className="flex items-center gap-2 mb-4 text-slate-900 font-bold">
+                                <List className="w-4 h-4" />
+                                <span>目录</span>
+                              </div>
+                              <nav className="space-y-1">
+                                {extractTOC(currentProject.outline).map((item, idx) => (
+                                  <button
+                                    key={idx}
+                                    onClick={() => scrollToId(item.id)}
+                                    className={cn(
+                                      "w-full text-left text-sm py-1.5 px-3 rounded-lg transition-all hover:bg-slate-50",
+                                      item.level === 1 ? "font-bold text-slate-900" : 
+                                      item.level === 2 ? "pl-6 text-slate-600" : "pl-9 text-slate-500"
+                                    )}
+                                  >
+                                    {item.text}
+                                  </button>
+                                ))}
+                              </nav>
+                            </div>
 
-                        {/* Content Area */}
-                        <div className="flex-1 overflow-y-auto pr-2">
-                          <div className="markdown-body">
-                            <Markdown rehypePlugins={[rehypeSlug]} remarkPlugins={[remarkGfm]}>{currentProject.outline}</Markdown>
-                          </div>
-                        </div>
+                            {/* Content Area */}
+                            <div className="flex-1 overflow-y-auto pr-2">
+                              <div className="markdown-body">
+                                <Markdown rehypePlugins={[rehypeSlug]} remarkPlugins={[remarkGfm]}>{currentProject.outline}</Markdown>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </>
                     ) : (
                       <div className="w-full h-full flex flex-col items-center justify-center text-center py-20">

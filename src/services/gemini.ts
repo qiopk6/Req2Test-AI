@@ -224,7 +224,7 @@ export async function generateTestCases(
                   },
                   inputData: { type: Type.STRING },
                   expectedResult: { type: Type.STRING },
-                  priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                  priority: { type: Type.STRING, enum: ["P1", "P2", "P3", "P4", "P5"] },
                   remarks: { type: Type.STRING }
                 },
                 required: ["module", "id", "title", "type", "preconditions", "steps", "inputData", "expectedResult", "priority", "remarks"]
@@ -252,30 +252,38 @@ export async function generateTestCases(
   const model = modelName;
   
   const prompt = `
-    你是一名顶级软件测试专家。我将提供整个产品的功能文档、页面设计和接口列表。请帮我生成**极其详尽的全套测试用例矩阵**。
-    
+    你是一名顶级软件测试专家，擅长使用等价类划分和边界值分析理论。请根据需求文档生成高质量的测试用例矩阵。
+
+    **核心原则：**
+    1. **场景驱动**：基于实际场景复杂度生成用例。
+    2. **数据具体**：测试数据必须具体，严禁使用占位符（例如：使用 "test_user" 而不是 "{username}"）。
+    3. **可验证性**：预期结果必须明确可验证（例如：跳转到 /home 页面，顶部显示 "欢迎，test_user"）。
+
     **测试风格要求：**
     ${styleInstruction}
 
-    **关键目标：**
-    1. **穷尽性测试**：不要只生成几个示例。你需要深入挖掘文档中的每一个功能点、每一个输入框、每一个按钮、每一个接口参数。
-    2. **数量要求**：请根据文档复杂度生成尽可能多的用例（目标 30-50 条以上，如果文档复杂则更多）。必须确保覆盖所有模块。
-    3. **全局规则：所有生成的测试用例内容必须使用中文。**
-    4. **多维度覆盖：**
-       - **前端**：UI交互、表单验证（各种非法输入）、页面跳转、E2E流程、响应式适配。
-       - **后端**：所有 API 的请求/响应、必填项、类型校验、权限校验、逻辑校验、异常处理。
-       - **场景**：正向流程、负向流程、边界值（极值、空值、超长值）、异常场景（断网、超时、并发、非法操作）。
+    **优先级 (P1-P5)：**
+    - P1: 核心功能正向流程
+    - P2: 基本功能正向流程
+    - P3: 核心功能异常场景
+    - P4: 边界条件
+    - P5: 低频场景
+
+    **测试类型 (12选1)：**
+    功能、兼容性、易用性、性能、稳定性、安全性、可靠性、效果(AI类、资源类)、效果(硬件器件类)、可维护性、可移植性、埋点
+
+    **全局规则：所有输出内容必须使用中文。**
 
     **用例结构要求：**
     - 模块名称：清晰标注所属功能块或接口。
     - 用例编号：MOD001_TC001 格式。
-    - 用例标题：简洁明确。
-    - 测试类型：功能/性能/安全/兼容性/边界值/异常/接口。
+    - 用例标题：简洁明确，以"验证"开头。
+    - 测试类型：上述12种类型之一。
     - 前置条件：执行该用例的前提。
-    - 测试步骤：步骤必须详细，任何人拿到都能复现。
+    - 测试步骤：步骤必须详细，用句号分隔，编号连续。
     - 输入数据：具体的测试数据（如：'admin123', '-1', '超长字符串...'）。
-    - 预期结果：明确的成功或失败判定标准。
-    - 优先级：High/Medium/Low。
+    - 预期结果：明确的成功或失败判定标准，与步骤一一对应。
+    - 优先级：P1-P5。
     - 备注：说明该用例设计的意图或注意点。
 
     **需求文档内容如下：**
@@ -283,7 +291,7 @@ export async function generateTestCases(
 
     ${images && images.length > 0 ? "此外，我还提供了一些设计图作为参考，请结合设计图中的 UI 细节（如按钮位置、输入框类型、视觉反馈等）来完善测试用例。" : ""}
 
-    请严格按照以上要求，生成一份完整、专业、可直接用于生产环境的测试用例矩阵。
+    请严格按照以上要求，生成一份完整、专业、可直接用于生产环境的测试用例矩阵（JSON 格式）。
   `;
 
   const parts: { text?: string; inlineData?: { mimeType: string; data: string } }[] = [{ text: prompt }];
@@ -320,7 +328,7 @@ export async function generateTestCases(
               },
               inputData: { type: Type.STRING },
               expectedResult: { type: Type.STRING },
-              priority: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+              priority: { type: Type.STRING, enum: ["P1", "P2", "P3", "P4", "P5"] },
               remarks: { type: Type.STRING }
             },
             required: ["module", "id", "title", "type", "preconditions", "steps", "inputData", "expectedResult", "priority", "remarks"]
@@ -395,11 +403,12 @@ export async function generateXMindContent(
 
     【输出格式】
 
-    必须使用 **Markdown 标题层级结构**，以确保 XMind 导入后能识别为 3 级结构：
+    必须使用 **Markdown 标题层级结构**，以确保 XMind 导入后能识别为 4 级结构：
 
     # 功能模块 (第1级)
     ## 测试点名称 (第2级)
-    ### 步骤：xxxx \n预期：xxxx (第3级)
+    ### 步骤：xxxx (第3级)
+    #### 预期：xxxx (第4级)
 
     示例格式：
 

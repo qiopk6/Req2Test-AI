@@ -3,8 +3,7 @@ import mammoth from 'mammoth';
 
 // Use a more robust way to set the worker
 // We use the same version as the installed package to ensure compatibility
-const PDFJS_VERSION = '4.4.168'; 
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 export async function parseFile(file: File): Promise<string> {
   const extension = file.name.split('.').pop()?.toLowerCase();
@@ -27,8 +26,9 @@ async function parsePdf(file: File): Promise<string> {
     const arrayBuffer = await file.arrayBuffer();
     const loadingTask = pdfjs.getDocument({ 
       data: arrayBuffer,
-      useSystemFonts: true,
-      isEvalSupported: false,
+      cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
     });
     const pdf = await loadingTask.promise;
     let fullText = '';
